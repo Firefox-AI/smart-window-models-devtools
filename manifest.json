@@ -1,0 +1,53 @@
+{
+  "manifest_version": 2,
+  "name": "Smart Window Model DevTools",
+  "version": "0.1",
+  "description": "Export SmartWindow model context information to a file for the Firefox AI Models team.",
+
+  "permissions": [
+    "mozillaAddons"
+  ],
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "smart-window-model-devtools@mozilla.com",
+      "strict_min_version": "142.0"
+    }
+  },
+
+  "background": {
+    "scripts": ["background.js"]
+  },
+
+  "icons": {
+    "48": "icons/icon16.svg",
+    "96": "icons/icon32.svg"
+  },
+
+  "browser_action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Smart Window Model",
+    "browser_style": true
+  },
+
+  "commands": {
+    "trigger-export": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+E",
+        "mac": "Command+Shift+E"
+      },
+      "description": "Open the Smart Window Model DevTools export dialog"
+    }
+  },
+
+  "experiment_apis": {
+    "smartwindow": {
+      "schema": "experiments/smartwindow/schema.json",
+      "parent": {
+        "scopes": ["addon_parent"],
+        "script": "experiments/smartwindow/api.js",
+        "paths": [["experiments", "smartwindow"]]
+      }
+    }
+  }
+}

@@ -1,0 +1,55 @@
+[
+  {
+    "namespace": "experiments.smartwindow",
+    "description": "Privileged access to Firefox internals for SmartWindow model context inspection.",
+    "functions": [
+      {
+        "name": "getSmartWindowData",
+        "type": "function",
+        "description": "Collects SmartWindow model context from browser internals.",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "exportToFile",
+        "type": "function",
+        "description": "Opens a native Save dialog and writes collected data to the chosen file.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "options",
+            "type": "object",
+            "optional": true,
+            "properties": {
+              "notes":        { "type": "string", "optional": true },
+              "bugzillaUrls": { "type": "array",  "optional": true, "items": { "type": "string" } },
+              "startDate":    { "type": "string", "optional": true },
+              "endDate":      { "type": "string", "optional": true }
+            }
+          }
+        ]
+      },
+      {
+        "name": "triggerExport",
+        "type": "function",
+        "description": "Shows the export dialog in the active SmartWindow page and exports to file. Used by the keyboard shortcut so it works even when the toolbar is hidden.",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "init",
+        "type": "function",
+        "description": "Injects the export button into all open browser windows and watches for new ones.",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "uninit",
+        "type": "function",
+        "description": "Removes the injected export button from all windows.",
+        "async": true,
+        "parameters": []
+      }
+    ]
+  }
+]

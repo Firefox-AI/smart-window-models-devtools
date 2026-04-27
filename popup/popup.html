@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Window Model Context Export</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <h1>Smart Window Model Context Export</h1>
+
+  <div class="field-group">
+    <div class="field-label-row">
+      <label>Bugzilla URLs</label>
+      <button type="button" id="bug-add-btn" class="icon-btn">+</button>
+    </div>
+    <div id="bug-urls-container">
+      <div class="bug-row">
+        <input type="text" class="bug-input" placeholder="https://bugzilla.mozilla.org/show_bug.cgi?id=…" />
+        <button type="button" class="remove-btn icon-btn">×</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="field-group">
+    <label>Browsing History Date Range</label>
+    <div class="date-row">
+      <input type="text" id="start-date" placeholder="YYYY-MM-DD HH:MM" />
+      <span class="date-sep">–</span>
+      <input type="text" id="end-date" placeholder="YYYY-MM-DD HH:MM" />
+    </div>
+  </div>
+
+  <div class="field-group">
+    <label for="notes">Notes</label>
+    <textarea id="notes" rows="5" placeholder="Add any notes about this export…"></textarea>
+  </div>
+
+  <button id="export-btn">Export to File…</button>
+  <div id="status" class="status hidden"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
