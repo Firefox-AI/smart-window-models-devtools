@@ -29,3 +29,19 @@ When you click on the button, a pop up will overlay the screen with the followin
 Keyboard shortcuts `Ctrl+Shift+E` on Windows and `Cmd+Shift+E` on Mac or clicking the extensions icon (puzzle piece) and then the extension name will also open the same pop up.
 
 Click save and choose a location and file name for your dump file. It will be a JSON file. Hand this to the Models team.
+
+## FAQ
+
+### Debugging
+
+Q: When I try to install the extension, I get the following error:
+```
+Error: can't access property "exportToFile", browser.experiments.smartwindow is undefined
+```
+
+A: We found this happens if you install the extension **before** setting the preferences in installation steps 1 and 2. To fix this:
+
+1. Uninstall the extension
+2. Set the prefs correctly
+3. Restart firefox
+4. Reinstall the extension
