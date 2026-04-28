@@ -12,12 +12,6 @@ body {
   background: #fff;
 }
 
-h1 {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0 0 16px;
-}
-
 label {
   display: block;
   font-weight: 600;
@@ -27,6 +21,7 @@ label {
 }
 
 input[type="text"],
+select,
 textarea {
   width: 100%;
   padding: 7px 8px;
@@ -35,6 +30,22 @@ textarea {
   border: 1px solid #ccc;
   border-radius: 4px;
   color: #1c1b22;
+  background: #fff;
+}
+
+.hidden {
+  display: none !important;
+}
+
+input[type="text"].date-error {
+  border: 10px solid #e22850;
+  outline: none;
+}
+
+.date-error-msg {
+  font-size: 11px;
+  color: #a4000f;
+  margin-top: 4px;
 }
 
 textarea {

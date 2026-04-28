@@ -130,12 +130,37 @@ function showExportDialog(doc) {
     bugAddBtn.addEventListener("click", addBugRow);
     addBugRow();
 
+    const DIALOG_DATETIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
+    const DIALOG_PRESET_MS = { "1h": 3600000, "4h": 14400000, "24h": 86400000, "3d": 259200000, "7d": 604800000, "30d": 2592000000 };
+    const fmtLocal = d => {
+      const pad = n => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+
     const dateRangeLabel = doc.createElement("label");
-    dateRangeLabel.textContent = "Browsing History Date Range";
+    dateRangeLabel.textContent = "Browsing History";
     Object.assign(dateRangeLabel.style, fieldStyle);
 
+    const presetSelect = doc.createElement("select");
+    Object.assign(presetSelect.style, { ...inputStyle, background: "#2c2c32" });
+    for (const [value, label] of [
+      ["", "None"],
+      ["1h", "Last 1 hour"],
+      ["4h", "Last 4 hours"],
+      ["24h", "Last 24 hours"],
+      ["3d", "Last 3 days"],
+      ["7d", "Last 7 days"],
+      ["30d", "Last 30 days"],
+      ["custom", "Custom range…"],
+    ]) {
+      const opt = doc.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      presetSelect.appendChild(opt);
+    }
+
     const dateRow = doc.createElement("div");
-    Object.assign(dateRow.style, { display: "flex", gap: "8px", alignItems: "center" });
+    Object.assign(dateRow.style, { display: "none", gap: "8px", alignItems: "center" });
 
     const startInput = doc.createElement("input");
     startInput.type = "text";
@@ -148,10 +173,31 @@ function showExportDialog(doc) {
 
     const endInput = doc.createElement("input");
     endInput.type = "text";
-    endInput.placeholder = "YYYY-MM-DD HH:MM";
+    endInput.placeholder = "YYYY-MM-DD HH:MM (optional)";
     Object.assign(endInput.style, { ...inputStyle, flex: "1" });
 
+    const dateErrorMsg = doc.createElement("div");
+    Object.assign(dateErrorMsg.style, { fontSize: "11px", color: "#a4000f", display: "none" });
+    dateErrorMsg.textContent = "Use format YYYY-MM-DD HH:MM";
+
     dateRow.append(startInput, dateSep, endInput);
+
+    presetSelect.addEventListener("change", () => {
+      const isCustom = presetSelect.value === "custom";
+      dateRow.style.display = isCustom ? "flex" : "none";
+      if (!isCustom) {
+        startInput.style.borderColor = "";
+        endInput.style.borderColor = "";
+        dateErrorMsg.style.display = "none";
+      }
+    });
+
+    [startInput, endInput].forEach(el => {
+      el.addEventListener("input", () => {
+        el.style.borderColor = "";
+        dateErrorMsg.style.display = "none";
+      });
+    });
 
     const notesLabel = doc.createElement("label");
     notesLabel.textContent = "Notes";
@@ -188,22 +234,40 @@ function showExportDialog(doc) {
 
     const finish = result => { overlay.remove(); resolve(result); };
     cancelBtn.addEventListener("click", () => finish(null));
-    saveBtn.addEventListener("click", () =>
+    saveBtn.addEventListener("click", () => {
+      let startDate = "", endDate = "";
+      const preset = presetSelect.value;
+      if (preset === "custom") {
+        const startVal = startInput.value.trim();
+        const endVal = endInput.value.trim();
+        let valid = true;
+        if (!DIALOG_DATETIME_RE.test(startVal)) { startInput.style.borderColor = "#e22850"; valid = false; }
+        else startInput.style.borderColor = "";
+        if (endVal && !DIALOG_DATETIME_RE.test(endVal)) { endInput.style.borderColor = "#e22850"; valid = false; }
+        else endInput.style.borderColor = "";
+        if (!valid) { dateErrorMsg.style.display = "block"; return; }
+        startDate = startVal;
+        endDate = endVal;
+      } else if (preset) {
+        const now = new Date();
+        startDate = fmtLocal(new Date(now - DIALOG_PRESET_MS[preset]));
+        endDate = fmtLocal(now);
+      }
       finish({
         notes: textarea.value,
         bugzillaUrls: Array.from(bugUrlsContainer.querySelectorAll("input"))
           .map(i => i.value.trim())
           .filter(Boolean),
-        startDate: startInput.value,
-        endDate: endInput.value,
-      })
-    );
+        startDate,
+        endDate,
+      });
+    });
     overlay.addEventListener("keydown", e => {
       if (e.key === "Escape") finish(null);
     });
 
     btnRow.append(cancelBtn, saveBtn);
-    dialog.append(bugLabelRow, bugUrlsContainer, dateRangeLabel, dateRow, notesLabel, textarea, btnRow);
+    dialog.append(bugLabelRow, bugUrlsContainer, dateRangeLabel, presetSelect, dateRow, dateErrorMsg, notesLabel, textarea, btnRow);
     overlay.appendChild(dialog);
     doc.body.appendChild(overlay);
     textarea.focus();
