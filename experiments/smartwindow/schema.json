@@ -11,6 +11,27 @@
         "parameters": []
       },
       {
+        "name": "getMemories",
+        "type": "function",
+        "description": "Returns stored SmartWindow memories ({id, memory_summary}) — used by the popup to let the user select memories for groundtruth.tagged_memories.",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "getTools",
+        "type": "function",
+        "description": "Returns the registered SmartWindow tools normalized to [{name, description, args: [{name, type, required, description, enum?}]}] — used by the popup to render per-tool argument inputs for groundtruth.tools.",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "getUserMessageCount",
+        "type": "function",
+        "description": "Returns the number of real user messages in the active SmartWindow conversation, skipping mocked-system messages (real-time context, relevant memories). Used to drive turn-conditional argument requirements (e.g. run_search.query is required on turns 2+).",
+        "async": true,
+        "parameters": []
+      },
+      {
         "name": "exportToFile",
         "type": "function",
         "description": "Opens a native Save dialog and writes collected data to the chosen file.",
@@ -21,10 +42,12 @@
             "type": "object",
             "optional": true,
             "properties": {
-              "notes":        { "type": "string", "optional": true },
-              "bugzillaUrls": { "type": "array",  "optional": true, "items": { "type": "string" } },
-              "startDate":    { "type": "string", "optional": true },
-              "endDate":      { "type": "string", "optional": true }
+              "notes":            { "type": "string", "optional": true },
+              "bugzillaUrls":     { "type": "array",  "optional": true, "items": { "type": "string" } },
+              "tags":             { "type": "array",  "optional": true, "items": { "type": "string" } },
+              "groundtruth":      { "type": "any",    "optional": true },
+              "startDate":        { "type": "string", "optional": true },
+              "endDate":          { "type": "string", "optional": true }
             }
           }
         ]

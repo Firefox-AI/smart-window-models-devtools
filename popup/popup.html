@@ -7,42 +7,99 @@
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <div class="field-group">
-    <div class="field-label-row">
-      <label>Bugzilla URLs</label>
-      <button type="button" id="bug-add-btn" class="icon-btn">+</button>
-    </div>
-    <div id="bug-urls-container">
-      <div class="bug-row">
-        <input type="text" class="bug-input" placeholder="https://bugzilla.mozilla.org/show_bug.cgi?id=…" />
-        <button type="button" class="remove-btn icon-btn">×</button>
+  <div class="columns">
+    <div class="column column-left">
+      <div class="field-group">
+        <div class="field-label-row">
+          <label>Bugzilla URLs</label>
+          <button type="button" id="bug-add-btn" class="icon-btn">+</button>
+        </div>
+        <div id="bug-urls-container">
+          <div class="bug-row">
+            <input type="text" class="bug-input" placeholder="https://bugzilla.mozilla.org/show_bug.cgi?id=…" />
+            <button type="button" class="remove-btn icon-btn">×</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <div class="field-label-row">
+          <label>Tags</label>
+          <button type="button" id="tag-add-btn" class="icon-btn">+</button>
+        </div>
+        <div id="tags-container">
+          <div class="tag-row">
+            <input type="text" class="tag-input" placeholder="Add a tag…" />
+            <button type="button" class="remove-btn icon-btn">×</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <label>Browsing History</label>
+        <select id="history-preset">
+          <option value="">None</option>
+          <option value="1h">Last 1 hour</option>
+          <option value="4h">Last 4 hours</option>
+          <option value="24h">Last 24 hours</option>
+          <option value="3d">Last 3 days</option>
+          <option value="7d">Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+          <option value="custom">Custom range…</option>
+        </select>
+        <div class="date-row hidden" id="custom-date-row">
+          <input type="text" id="start-date" placeholder="YYYY-MM-DD HH:MM" />
+          <span class="date-sep">–</span>
+          <input type="text" id="end-date" placeholder="YYYY-MM-DD HH:MM (optional)" />
+        </div>
+        <div class="date-error-msg hidden" id="date-error-msg">Use format YYYY-MM-DD HH:MM</div>
+      </div>
+
+      <div class="field-group">
+        <label for="notes">Notes</label>
+        <textarea id="notes" rows="5" placeholder="Add any notes about this export…"></textarea>
       </div>
     </div>
-  </div>
 
-  <div class="field-group">
-    <label>Browsing History</label>
-    <select id="history-preset">
-      <option value="">None</option>
-      <option value="1h">Last 1 hour</option>
-      <option value="4h">Last 4 hours</option>
-      <option value="24h">Last 24 hours</option>
-      <option value="3d">Last 3 days</option>
-      <option value="7d">Last 7 days</option>
-      <option value="30d">Last 30 days</option>
-      <option value="custom">Custom range…</option>
-    </select>
-    <div class="date-row hidden" id="custom-date-row">
-      <input type="text" id="start-date" placeholder="YYYY-MM-DD HH:MM" />
-      <span class="date-sep">–</span>
-      <input type="text" id="end-date" placeholder="YYYY-MM-DD HH:MM (optional)" />
+    <div class="column column-right">
+      <details class="groundtruth-section" open>
+        <summary>Expected Behavior</summary>
+        <details class="groundtruth-subsection" open>
+          <summary>User Journey</summary>
+          <div class="field-group">
+            <label for="expected-behavior">Expected behavior</label>
+            <textarea id="expected-behavior" rows="5" placeholder="Describe what you expected to happen…"></textarea>
+          </div>
+        </details>
+        <details class="groundtruth-subsection">
+          <summary>Tagged Memories</summary>
+          <div id="tagged-memories-container" class="tagged-memories-list">
+            <div class="tagged-memories-empty">Loading memories…</div>
+          </div>
+        </details>
+        <details class="groundtruth-subsection">
+          <summary>Sensitive Topic</summary>
+          <div class="checkbox-row">
+            <input type="checkbox" id="sensitive-topic-input" />
+            <label for="sensitive-topic-input">Mark this turn as sensitive.</label>
+          </div>
+        </details>
+        <details class="groundtruth-subsection">
+          <summary>Follow-ups</summary>
+          <div class="checkbox-row">
+            <input type="checkbox" id="followups-input" />
+            <label for="followups-input">Expect follow-up suggestions on this turn.</label>
+          </div>
+        </details>
+        <details class="groundtruth-subsection">
+          <summary>Tools</summary>
+          <div id="tools-container" class="tools-list">
+            <div class="tools-empty">Loading tools…</div>
+          </div>
+          <button type="button" id="tool-add-btn" class="icon-btn tool-add-btn" hidden>+ Add tool</button>
+        </details>
+      </details>
     </div>
-    <div class="date-error-msg hidden" id="date-error-msg">Use format YYYY-MM-DD HH:MM</div>
-  </div>
-
-  <div class="field-group">
-    <label for="notes">Notes</label>
-    <textarea id="notes" rows="5" placeholder="Add any notes about this export…"></textarea>
   </div>
 
   <button id="export-btn">Export to File…</button>

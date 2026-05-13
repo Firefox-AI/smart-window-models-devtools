@@ -7,9 +7,20 @@ body {
   font-size: 14px;
   margin: 0;
   padding: 16px;
-  width: 380px;
+  width: 720px;
   color: #1c1b22;
   background: #fff;
+}
+
+.columns {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.column {
+  flex: 1;
+  min-width: 0;
 }
 
 label {
@@ -84,18 +95,21 @@ textarea {
   background: #e0e0e6;
 }
 
-#bug-urls-container {
+#bug-urls-container,
+#tags-container {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.bug-row {
+.bug-row,
+.tag-row {
   display: flex;
   gap: 6px;
 }
 
-.bug-row input {
+.bug-row input,
+.tag-row input {
   flex: 1;
 }
 
@@ -124,6 +138,186 @@ textarea {
   font-size: 13px;
   color: #5b5b66;
   flex-shrink: 0;
+}
+
+.groundtruth-section {
+  margin-bottom: 14px;
+  border: 1px solid #d0d0d8;
+  border-radius: 4px;
+  padding: 6px 10px;
+  background: #f8f8fb;
+}
+
+.groundtruth-section > summary {
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  color: #0c0c0d;
+  padding: 2px 0;
+}
+
+.groundtruth-subsection {
+  margin-top: 8px;
+  padding-left: 4px;
+}
+
+.groundtruth-subsection > summary {
+  font-weight: 500;
+  font-size: 12px;
+  cursor: pointer;
+  color: #1c1b22;
+  padding: 2px 0;
+}
+
+.tagged-memories-list {
+  margin-top: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tagged-memory-row,
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.tagged-memory-row input[type="checkbox"],
+.checkbox-row input[type="checkbox"] {
+  margin: 2px 0 0 0;
+  flex-shrink: 0;
+}
+
+.tagged-memory-row label,
+.checkbox-row label {
+  margin: 0;
+  font-weight: 400;
+  color: #1c1b22;
+  cursor: pointer;
+}
+
+.checkbox-row {
+  margin-top: 6px;
+}
+
+.tagged-memories-empty,
+.tools-empty {
+  font-size: 12px;
+  color: #5b5b66;
+  font-style: italic;
+}
+
+.tools-list {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-row {
+  border: 1px solid #d0d0d8;
+  border-radius: 4px;
+  padding: 6px 8px;
+  background: #fff;
+}
+
+.tool-row-header {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.tool-row-header select {
+  flex: 1;
+}
+
+.tool-args {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tool-arg {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tool-arg-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #1c1b22;
+}
+
+.tool-arg-required {
+  color: #a4000f;
+  margin-left: 2px;
+}
+
+.tool-arg-description {
+  font-size: 10px;
+  color: #5b5b66;
+}
+
+.tool-arg input[type="text"],
+.tool-arg input[type="number"],
+.tool-arg select,
+.tool-arg textarea {
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+.tool-arg.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-arg input[type="text"].date-error {
+  border: 1px solid #e22850;
+  outline: none;
+}
+
+.tool-arg-error {
+  font-size: 10px;
+  color: #a4000f;
+  margin-top: 2px;
+}
+
+.tool-arg-label-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-arg-label-row .tool-arg-label {
+  margin: 0;
+}
+
+.string-list-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.string-list-row {
+  display: flex;
+  gap: 6px;
+}
+
+.string-list-row input {
+  flex: 1;
+}
+
+.tool-add-btn {
+  margin-top: 8px;
+  align-self: flex-start;
 }
 
 #export-btn {
