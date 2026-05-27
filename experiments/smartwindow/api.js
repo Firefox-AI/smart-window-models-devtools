@@ -16,6 +16,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "resource://gre/modules/PlacesUtils.sys.mjs",
   toolsConfig:
     "moz-src:///browser/components/aiwindow/models/Tools.sys.mjs",
+  loadPrompt:
+    "moz-src:///browser/components/aiwindow/models/PromptLoader.sys.mjs",
 });
 
 /* Version number of the JSON file schema
@@ -69,6 +71,8 @@ function showExportDialog(doc) {
       padding: "20px",
       width: "720px",
       maxWidth: "90vw",
+      maxHeight: "90vh",
+      overflowY: "auto",
       display: "flex",
       flexDirection: "column",
       gap: "12px",
@@ -755,6 +759,172 @@ function showExportDialog(doc) {
       }
     })();
 
+    // Conversation snapshots the basic view pre-fills from. Both are
+    // fetched once on dialog open; they stay null until their fetches
+    // resolve.
+    //   - compactedConversation: openAI-format messages (post-PromptOptimizer)
+    //   - rawConversation: raw ChatConversation.messages, used for
+    //     tagged-memories pre-fill (carries per-message `memoriesApplied`
+    //     metadata that's lost in the openAI-format conversion).
+    let compactedConversation = null;
+    let rawConversation = null;
+    const compactedConversationReady = (async () => {
+      try {
+        compactedConversation = await getCompactedConversation();
+        rawConversation = getRawConversation();
+        await basicMemoriesReady;
+        prefillBasicView(compactedConversation, rawConversation);
+      } catch (err) {
+        console.warn("[smartwindow] failed to load conversation snapshots:", err);
+        compactedConversation = compactedConversation ?? [];
+        rawConversation = rawConversation ?? [];
+      }
+    })();
+
+    // Pre-fill the basic view's question answers based on what the assistant
+    // actually did in response to the last user turn. Mirrors prefillBasicView
+    // in popup.js but targets the dialog's locally-built elements.
+    const SENSITIVE_TOPIC_DISCLAIMER = "This is not professional advice, but here's how to think about it.";
+
+    const prefillBasicView = (compacted, raw) => {
+      const postMessages = getPostUserAssistantToolMessages(compacted);
+      const userMessageCount = compacted.filter(m => m?.role === "user").length;
+
+      // Tagged-memories + follow-ups questions both inspect the *raw*
+      // conversation's post-last-user assistant messages (the openAI-format
+      // conversion drops `memoriesApplied` and `followUpSuggestions`).
+      const postUserRawAssistants = getPostUserRawAssistantMessages(raw);
+
+      // Tagged-memories: collect every memoriesApplied[].id and check
+      // matching memory rows (plus the main box and reveal the sub-list so
+      // the user sees the pre-fill).
+      const appliedIds = new Set();
+      for (const msg of postUserRawAssistants) {
+        if (!Array.isArray(msg.memoriesApplied)) continue;
+        for (const mem of msg.memoriesApplied) {
+          if (mem?.id) appliedIds.add(mem.id);
+        }
+      }
+      if (appliedIds.size) {
+        basicTaggedMemoriesCheckbox.checked = true;
+        basicTaggedMemoriesSub.style.display = "flex";
+        for (const cb of basicTaggedMemoriesList.querySelectorAll(".basic-memory-input")) {
+          if (appliedIds.has(cb.value)) cb.checked = true;
+        }
+      }
+
+      // Follow-ups: if any of those assistant messages has a non-empty
+      // followUpSuggestions list, check the box.
+      const hasFollowups = postUserRawAssistants.some(
+        m => Array.isArray(m.followUpSuggestions) && m.followUpSuggestions.length
+      );
+      if (hasFollowups) {
+        basicFollowupsCheckbox.checked = true;
+      }
+
+      // Sensitive-topic question: if any assistant message after the last
+      // user turn includes the disclaimer string, check the box.
+      const disclaimerSeen = postMessages.some(
+        m => m?.role === "assistant"
+          && typeof m.content === "string"
+          && m.content.includes(SENSITIVE_TOPIC_DISCLAIMER)
+      );
+      if (disclaimerSeen) {
+        basicSensitiveTopicCheckbox.checked = true;
+      }
+
+      // Web-search question: was run_search called? → check the box. On turns
+      // 2+, also reveal the sub-input and pre-fill the query from the tool
+      // call. The `query` arg is only expected on follow-up turns, so on the
+      // first user turn we leave the sub-question hidden.
+      const runSearchArgs = getToolCallArgs(postMessages, "run_search");
+      if (runSearchArgs) {
+        webSearchCheckbox.checked = true;
+        if (userMessageCount >= 2) {
+          webSearchSub.style.display = "flex";
+          if (typeof runSearchArgs.query === "string" && runSearchArgs.query.trim()) {
+            searchQueryInput.value = runSearchArgs.query;
+          }
+        }
+      }
+
+      // Open-tabs question: was get_open_tabs called? → check the main box
+      // and reveal the tab sub-list.
+      if (getToolCallArgs(postMessages, "get_open_tabs")) {
+        openTabsCheckbox.checked = true;
+        openTabsSub.style.display = "flex";
+      }
+
+      // Aggregate every URL the assistant tried to fetch via get_page_content
+      // across all such calls in this turn, then split by whether it's
+      // currently open in a tab:
+      //   - Matches an open tab → check that tab's checkbox under Q3
+      //   - Not in any open tab → pre-fill Q4 (other pages) URL inputs
+      const pageContentCalls = getAllToolCallArgs(postMessages, "get_page_content");
+      const requestedUrls = pageContentCalls
+        .flatMap(args => Array.isArray(args?.url_list) ? args.url_list : [])
+        .filter(u => typeof u === "string" && u.trim());
+
+      if (requestedUrls.length) {
+        const openTabUrls = new Set(
+          Array.from(openTabsList.querySelectorAll(".basic-tab-input"))
+            .map(cb => cb.dataset.url)
+            .filter(Boolean)
+        );
+
+        const seen = new Set();
+        const matchingTabUrls = new Set();
+        const otherUrls = [];
+        for (const url of requestedUrls) {
+          if (seen.has(url)) continue;
+          seen.add(url);
+          if (openTabUrls.has(url)) matchingTabUrls.add(url);
+          else otherUrls.push(url);
+        }
+
+        // Q3: check matching tab checkboxes.
+        if (matchingTabUrls.size) {
+          for (const cb of openTabsList.querySelectorAll(".basic-tab-input")) {
+            if (matchingTabUrls.has(cb.dataset.url)) cb.checked = true;
+          }
+        }
+
+        // Q4: pre-fill non-tab URLs into the input rows, check the box,
+        // reveal the sub-section. The first row already exists from
+        // addOtherPageRowDialog()'s initial call; use it for the first URL
+        // and add new rows for the rest.
+        if (otherUrls.length) {
+          const firstInput = otherPagesContainer.querySelector(".basic-other-page-input");
+          firstInput.value = otherUrls[0];
+          for (let i = 1; i < otherUrls.length; i++) {
+            addOtherPageRowDialog();
+            const newInput = otherPagesContainer.lastElementChild.querySelector("input");
+            newInput.value = otherUrls[i];
+          }
+          otherPagesCheckbox.checked = true;
+          otherPagesSub.style.display = "flex";
+        }
+      }
+
+      // Browsing-history question: was search_browsing_history called? →
+      // check the box, reveal the sub-section, and pre-fill any of
+      // searchTerm / startTs / endTs that the tool call carried.
+      const historyArgs = getToolCallArgs(postMessages, "search_browsing_history");
+      if (historyArgs) {
+        historyCheckbox.checked = true;
+        historySub.style.display = "flex";
+        if (typeof historyArgs.searchTerm === "string" && historyArgs.searchTerm.trim()) {
+          historySearchTermInput.value = historyArgs.searchTerm;
+        }
+        if (typeof historyArgs.startTs === "string" && historyArgs.startTs.trim()) {
+          historyStartTsInput.value = historyArgs.startTs;
+        }
+        if (typeof historyArgs.endTs === "string" && historyArgs.endTs.trim()) {
+          historyEndTsInput.value = historyArgs.endTs;
+        }
+      }
+    };
+
     const btnRow = doc.createElement("div");
     Object.assign(btnRow.style, { display: "flex", justifyContent: "flex-end", gap: "8px" });
 
@@ -889,6 +1059,7 @@ function showExportDialog(doc) {
       }
 
       finish({
+        mode: "expert",
         notes: textarea.value,
         bugzillaUrls: Array.from(bugUrlsContainer.querySelectorAll("input"))
           .map(i => i.value.trim())
@@ -906,6 +1077,83 @@ function showExportDialog(doc) {
     });
 
     btnRow.append(cancelBtn, saveBtn);
+
+    const dialogHeader = doc.createElement("div");
+    Object.assign(dialogHeader.style, {
+      display: "flex",
+      justifyContent: "flex-end",
+      alignItems: "center",
+    });
+
+    const expertToggleLabel = doc.createElement("label");
+    Object.assign(expertToggleLabel.style, {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: "8px",
+      fontSize: "12px",
+      fontWeight: "500",
+      color: "#1c1b22",
+      cursor: "pointer",
+      margin: "0",
+    });
+
+    const expertToggleText = doc.createElement("span");
+    expertToggleText.textContent = "Expert mode";
+
+    // Build the toggle switch with inline styles only — pseudo-elements and
+    // :checked sibling selectors don't work reliably when style sheets are
+    // injected into chrome:// documents, so the thumb position and track
+    // color are updated imperatively on `change`.
+    const expertToggleSwitch = doc.createElement("span");
+    Object.assign(expertToggleSwitch.style, {
+      position: "relative",
+      display: "inline-block",
+      width: "32px",
+      height: "18px",
+      flexShrink: "0",
+      background: "#c0c0c8",
+      borderRadius: "18px",
+      transition: "background-color 0.15s ease",
+    });
+
+    const expertToggleCheckbox = doc.createElement("input");
+    expertToggleCheckbox.type = "checkbox";
+    expertToggleCheckbox.id = "expert-mode-toggle";
+    Object.assign(expertToggleCheckbox.style, {
+      position: "absolute",
+      opacity: "0",
+      width: "100%",
+      height: "100%",
+      margin: "0",
+      cursor: "pointer",
+      zIndex: "1",
+    });
+
+    const expertToggleThumb = doc.createElement("span");
+    Object.assign(expertToggleThumb.style, {
+      position: "absolute",
+      height: "14px",
+      width: "14px",
+      left: "2px",
+      top: "2px",
+      background: "#fff",
+      borderRadius: "50%",
+      transition: "left 0.15s ease",
+      boxShadow: "0 1px 2px rgba(0, 0, 0, 0.2)",
+    });
+
+    expertToggleCheckbox.addEventListener("change", () => {
+      const on = expertToggleCheckbox.checked;
+      expertToggleSwitch.style.background = on ? "#0060df" : "#c0c0c8";
+      expertToggleThumb.style.left = on ? "16px" : "2px";
+      expertView.style.display = on ? "flex" : "none";
+      basicView.style.display = on ? "none" : "flex";
+    });
+
+    expertToggleSwitch.append(expertToggleCheckbox, expertToggleThumb);
+    expertToggleLabel.append(expertToggleText, expertToggleSwitch);
+    dialogHeader.appendChild(expertToggleLabel);
+
     const columnsWrapper = doc.createElement("div");
     Object.assign(columnsWrapper.style, {
       display: "flex",
@@ -935,7 +1183,640 @@ function showExportDialog(doc) {
     rightColumn.append(groundtruthSection);
     columnsWrapper.append(leftColumn, rightColumn);
 
-    dialog.append(columnsWrapper, btnRow);
+    const expertView = doc.createElement("div");
+    Object.assign(expertView.style, {
+      display: "none",
+      flexDirection: "column",
+      gap: "12px",
+    });
+    expertView.append(columnsWrapper, btnRow);
+
+    // Basic (non-expert) view — shown by default. Questions here map to
+    // pieces of `groundtruth` in the export; see collectBasicSmartWindowData.
+    const basicView = doc.createElement("div");
+    Object.assign(basicView.style, {
+      display: "flex",
+      flexDirection: "column",
+      gap: "14px",
+    });
+
+    const basicContent = doc.createElement("div");
+    Object.assign(basicContent.style, {
+      display: "flex",
+      flexDirection: "column",
+      gap: "14px",
+    });
+
+    // Q: "Write 1 to 3 sentences describing what you expected…"
+    //   Maps to groundtruth.user_journey.expected_behavior
+    const expectedBehaviorWrap = doc.createElement("div");
+    Object.assign(expectedBehaviorWrap.style, { display: "flex", flexDirection: "column", gap: "8px" });
+
+    const expectedBehaviorLabel = doc.createElement("label");
+    expectedBehaviorLabel.setAttribute("for", "basic-q-expected-behavior");
+    expectedBehaviorLabel.textContent = "Write 1 to 3 sentences describing what you expected the SmartWindow assistant to do";
+    Object.assign(expectedBehaviorLabel.style, {
+      fontSize: "13px",
+      fontWeight: "500",
+      color: "#1c1b22",
+      lineHeight: "1.4",
+      margin: "0",
+    });
+
+    const basicExpectedBehaviorTextarea = doc.createElement("textarea");
+    basicExpectedBehaviorTextarea.id = "basic-q-expected-behavior";
+    basicExpectedBehaviorTextarea.rows = 3;
+    basicExpectedBehaviorTextarea.placeholder = "I expected the assistant to…";
+    Object.assign(basicExpectedBehaviorTextarea.style, { ...inputStyle, fontSize: "13px", resize: "vertical" });
+
+    expectedBehaviorWrap.append(expectedBehaviorLabel, basicExpectedBehaviorTextarea);
+    basicContent.append(expectedBehaviorWrap);
+
+    // Q: "Did you expect the assistant to mention any of these topics it has
+    //  learned about you?" → groundtruth.tagged_memories = [memoryId, ...]
+    //  (Locals prefixed with `basic` to avoid colliding with the expert
+    //   view's taggedMemoriesSection / taggedMemoriesContainer / etc.)
+    const basicTaggedMemoriesWrap = doc.createElement("div");
+    Object.assign(basicTaggedMemoriesWrap.style, { display: "flex", flexDirection: "column", gap: "8px" });
+
+    const basicTaggedMemoriesRow = doc.createElement("div");
+    Object.assign(basicTaggedMemoriesRow.style, {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: "8px",
+      fontSize: "13px",
+      lineHeight: "1.4",
+    });
+
+    const basicTaggedMemoriesCheckbox = doc.createElement("input");
+    basicTaggedMemoriesCheckbox.type = "checkbox";
+    basicTaggedMemoriesCheckbox.id = "basic-q-tagged-memories";
+    Object.assign(basicTaggedMemoriesCheckbox.style, { margin: "3px 0 0 0", flexShrink: "0" });
+
+    const basicTaggedMemoriesLabel = doc.createElement("label");
+    basicTaggedMemoriesLabel.setAttribute("for", "basic-q-tagged-memories");
+    basicTaggedMemoriesLabel.textContent = "Did you expect the assistant to mention any of the topics below that it has learned about you?";
+    Object.assign(basicTaggedMemoriesLabel.style, { margin: "0", fontWeight: "500", color: "#1c1b22", cursor: "pointer" });
+
+    basicTaggedMemoriesRow.append(basicTaggedMemoriesCheckbox, basicTaggedMemoriesLabel);
+
+    const basicTaggedMemoriesSub = doc.createElement("div");
+    Object.assign(basicTaggedMemoriesSub.style, {
+      display: "none",
+      flexDirection: "column",
+      gap: "4px",
+      marginLeft: "24px",
+      paddingLeft: "8px",
+      borderLeft: "2px solid #d0d0d8",
+    });
+
+    const basicTaggedMemoriesList = doc.createElement("div");
+    Object.assign(basicTaggedMemoriesList.style, {
+      display: "flex",
+      flexDirection: "column",
+      gap: "4px",
+      maxHeight: "180px",
+      overflowY: "auto",
+    });
+
+    const basicTaggedMemoriesPlaceholder = doc.createElement("div");
+    basicTaggedMemoriesPlaceholder.textContent = "Loading memories…";
+    Object.assign(basicTaggedMemoriesPlaceholder.style, { fontSize: "12px", color: "#5b5b66", fontStyle: "italic" });
+    basicTaggedMemoriesList.appendChild(basicTaggedMemoriesPlaceholder);
+
+    basicTaggedMemoriesSub.append(basicTaggedMemoriesList);
+
+    basicTaggedMemoriesCheckbox.addEventListener("change", () => {
+      basicTaggedMemoriesSub.style.display = basicTaggedMemoriesCheckbox.checked ? "flex" : "none";
+    });
+
+    basicTaggedMemoriesWrap.append(basicTaggedMemoriesRow, basicTaggedMemoriesSub);
+    basicContent.append(basicTaggedMemoriesWrap);
+
+    // Load memories asynchronously (same source the expert view uses) and
+    // render checkbox rows. Captured in a promise so the basic-view pre-fill
+    // can wait for the rows to exist before flipping them.
+    const basicMemoriesReady = (async () => {
+      try {
+        const memories = await lazy.MemoriesManager.getAllMemories();
+        basicTaggedMemoriesList.replaceChildren();
+        if (!memories.length) {
+          const empty = doc.createElement("div");
+          empty.textContent = "No memories stored.";
+          Object.assign(empty.style, { fontSize: "12px", color: "#5b5b66", fontStyle: "italic" });
+          basicTaggedMemoriesList.appendChild(empty);
+          return;
+        }
+        for (const memory of memories) {
+          const row = doc.createElement("div");
+          Object.assign(row.style, {
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "6px",
+            fontSize: "12px",
+            lineHeight: "1.3",
+          });
+          const cb = doc.createElement("input");
+          cb.type = "checkbox";
+          cb.className = "basic-memory-input";
+          cb.value = memory.id;
+          Object.assign(cb.style, { margin: "2px 0 0 0", flexShrink: "0" });
+          const label = doc.createElement("label");
+          label.textContent = memory.memory_summary;
+          Object.assign(label.style, { margin: "0", fontWeight: "400", color: "#1c1b22", cursor: "pointer" });
+          label.addEventListener("click", () => cb.click());
+          row.append(cb, label);
+          basicTaggedMemoriesList.appendChild(row);
+        }
+      } catch (err) {
+        basicTaggedMemoriesList.replaceChildren();
+        const errEl = doc.createElement("div");
+        errEl.textContent = `Failed to load memories: ${err.message}`;
+        Object.assign(errEl.style, { fontSize: "12px", color: "#a4000f", fontStyle: "italic" });
+        basicTaggedMemoriesList.appendChild(errEl);
+      }
+    })();
+
+    // Q: "Did you ask about a topic that would require consulting a professional?"
+    //   Maps to groundtruth.sensitive_topic_disclaimers = { is_sensitive: true }
+    //   (Just a checkbox — no sub-fields. All locals here are `basic`-prefixed
+    //    to avoid colliding with the expert view's sensitiveTopic* variables
+    //    (sensitiveTopicSection, sensitiveTopicRow, sensitiveTopicCheckbox, …)
+    //    declared in the same function scope.)
+    const basicSensitiveTopicWrap = doc.createElement("div");
+    Object.assign(basicSensitiveTopicWrap.style, { display: "flex", flexDirection: "column", gap: "8px" });
+
+    const basicSensitiveTopicRow = doc.createElement("div");
+    Object.assign(basicSensitiveTopicRow.style, {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: "8px",
+      fontSize: "13px",
+      lineHeight: "1.4",
+    });
+
+    const basicSensitiveTopicCheckbox = doc.createElement("input");
+    basicSensitiveTopicCheckbox.type = "checkbox";
+    basicSensitiveTopicCheckbox.id = "basic-q-sensitive-topic";
+    Object.assign(basicSensitiveTopicCheckbox.style, { margin: "3px 0 0 0", flexShrink: "0" });
+
+    const basicSensitiveTopicLabel = doc.createElement("label");
+    basicSensitiveTopicLabel.setAttribute("for", "basic-q-sensitive-topic");
+    basicSensitiveTopicLabel.textContent = "Did you ask the assistant about any topic that would require consulting a professional (i.e. legal, medical, etc.)?";
+    Object.assign(basicSensitiveTopicLabel.style, { margin: "0", fontWeight: "500", color: "#1c1b22", cursor: "pointer" });
+
+    basicSensitiveTopicRow.append(basicSensitiveTopicCheckbox, basicSensitiveTopicLabel);
+    basicSensitiveTopicWrap.append(basicSensitiveTopicRow);
+    basicContent.append(basicSensitiveTopicWrap);
+
+    // Q: "Did the assistant suggest any follow-ups…?"
+    //   Maps to groundtruth.followups = []
+    //   (Locals prefixed with `basic` to avoid colliding with the expert
+    //    view's followupsSection / followupsCheckbox / etc.)
+    const basicFollowupsWrap = doc.createElement("div");
+    Object.assign(basicFollowupsWrap.style, { display: "flex", flexDirection: "column", gap: "8px" });
+
+    const basicFollowupsRow = doc.createElement("div");
+    Object.assign(basicFollowupsRow.style, {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: "8px",
+      fontSize: "13px",
+      lineHeight: "1.4",
+    });
+
+    const basicFollowupsCheckbox = doc.createElement("input");
+    basicFollowupsCheckbox.type = "checkbox";
+    basicFollowupsCheckbox.id = "basic-q-followups";
+    Object.assign(basicFollowupsCheckbox.style, { margin: "3px 0 0 0", flexShrink: "0" });
+
+    const basicFollowupsLabel = doc.createElement("label");
+    basicFollowupsLabel.setAttribute("for", "basic-q-followups");
+    basicFollowupsLabel.textContent = "Did the assistant suggest any follow-ups to continue the conversation, either in its response or as bubbles below it?";
+    Object.assign(basicFollowupsLabel.style, { margin: "0", fontWeight: "500", color: "#1c1b22", cursor: "pointer" });
+
+    basicFollowupsRow.append(basicFollowupsCheckbox, basicFollowupsLabel);
+    basicFollowupsWrap.append(basicFollowupsRow);
+    basicContent.append(basicFollowupsWrap);
+
+    // Q: "Did you expect the SmartWindow assistant to search the web for you?"
+    //   Maps to groundtruth.tools = [{ name: "run_search", args: { query } }]
+    const webSearchWrap = doc.createElement("div");
+    Object.assign(webSearchWrap.style, { display: "flex", flexDirection: "column", gap: "8px" });
+
+    const webSearchRow = doc.createElement("div");
+    Object.assign(webSearchRow.style, {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: "8px",
+      fontSize: "13px",
+      lineHeight: "1.4",
+    });
+
+    const webSearchCheckbox = doc.createElement("input");
+    webSearchCheckbox.type = "checkbox";
+    webSearchCheckbox.id = "basic-q-web-search";
+    Object.assign(webSearchCheckbox.style, { margin: "3px 0 0 0", flexShrink: "0" });
+
+    const webSearchLabel = doc.createElement("label");
+    webSearchLabel.setAttribute("for", "basic-q-web-search");
+    webSearchLabel.textContent = "Did you expect the SmartWindow assistant to search the web for you?";
+    Object.assign(webSearchLabel.style, { margin: "0", fontWeight: "500", color: "#1c1b22", cursor: "pointer" });
+
+    webSearchRow.append(webSearchCheckbox, webSearchLabel);
+
+    const webSearchSub = doc.createElement("div");
+    Object.assign(webSearchSub.style, {
+      display: "none",
+      flexDirection: "column",
+      gap: "4px",
+      marginLeft: "24px",
+      paddingLeft: "8px",
+      borderLeft: "2px solid #d0d0d8",
+    });
+
+    const webSearchSubLabel = doc.createElement("label");
+    webSearchSubLabel.setAttribute("for", "basic-q-search-query");
+    webSearchSubLabel.textContent = "What did you expect it to search for?";
+    Object.assign(webSearchSubLabel.style, { fontSize: "12px", fontWeight: "500", color: "#1c1b22", margin: "0" });
+
+    const searchQueryInput = doc.createElement("input");
+    searchQueryInput.type = "text";
+    searchQueryInput.id = "basic-q-search-query";
+    searchQueryInput.placeholder = "Search query…";
+    Object.assign(searchQueryInput.style, { ...inputStyle, fontSize: "13px" });
+
+    webSearchSub.append(webSearchSubLabel, searchQueryInput);
+
+    webSearchCheckbox.addEventListener("change", () => {
+      const on = webSearchCheckbox.checked;
+      webSearchSub.style.display = on ? "flex" : "none";
+      if (on) searchQueryInput.focus();
+    });
+
+    webSearchWrap.append(webSearchRow, webSearchSub);
+    basicContent.append(webSearchWrap);
+
+    // Q: "Did you expect the assistant to show/list/use/reference your open tabs?"
+    //   Maps to groundtruth.tools += { name: "get_open_tabs", args: { url_list } }
+    const openTabsWrap = doc.createElement("div");
+    Object.assign(openTabsWrap.style, { display: "flex", flexDirection: "column", gap: "8px" });
+
+    const openTabsRow = doc.createElement("div");
+    Object.assign(openTabsRow.style, {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: "8px",
+      fontSize: "13px",
+      lineHeight: "1.4",
+    });
+
+    const openTabsCheckbox = doc.createElement("input");
+    openTabsCheckbox.type = "checkbox";
+    openTabsCheckbox.id = "basic-q-open-tabs";
+    Object.assign(openTabsCheckbox.style, { margin: "3px 0 0 0", flexShrink: "0" });
+
+    const openTabsLabel = doc.createElement("label");
+    openTabsLabel.setAttribute("for", "basic-q-open-tabs");
+    openTabsLabel.textContent = "Did you expect the SmartWindow assistant to show you, list, use, or reference your currently opened tabs to answer your question?";
+    Object.assign(openTabsLabel.style, { margin: "0", fontWeight: "500", color: "#1c1b22", cursor: "pointer" });
+
+    openTabsRow.append(openTabsCheckbox, openTabsLabel);
+
+    const openTabsSub = doc.createElement("div");
+    Object.assign(openTabsSub.style, {
+      display: "none",
+      flexDirection: "column",
+      gap: "4px",
+      marginLeft: "24px",
+      paddingLeft: "8px",
+      borderLeft: "2px solid #d0d0d8",
+    });
+
+    const openTabsList = doc.createElement("div");
+    Object.assign(openTabsList.style, {
+      display: "flex",
+      flexDirection: "column",
+      gap: "4px",
+      maxHeight: "180px",
+      overflowY: "auto",
+    });
+
+    // Populate tab list synchronously — gBrowser is right here.
+    const openTabsSnapshot = getOpenTabs();
+    if (!openTabsSnapshot.length) {
+      const empty = doc.createElement("div");
+      empty.textContent = "No tabs open.";
+      Object.assign(empty.style, { fontSize: "12px", color: "#5b5b66", fontStyle: "italic" });
+      openTabsList.appendChild(empty);
+    } else {
+      for (const tab of openTabsSnapshot) {
+        const row = doc.createElement("div");
+        Object.assign(row.style, {
+          display: "flex",
+          alignItems: "flex-start",
+          gap: "6px",
+          fontSize: "12px",
+          lineHeight: "1.3",
+        });
+        const cb = doc.createElement("input");
+        cb.type = "checkbox";
+        cb.className = "basic-tab-input";
+        cb.dataset.url = tab.url || "";
+        Object.assign(cb.style, { margin: "2px 0 0 0", flexShrink: "0" });
+        const label = doc.createElement("label");
+        label.textContent = tab.title || tab.url || "(untitled)";
+        Object.assign(label.style, {
+          margin: "0",
+          fontWeight: "400",
+          color: "#1c1b22",
+          cursor: "pointer",
+          wordBreak: "break-word",
+        });
+        label.addEventListener("click", () => cb.click());
+        row.append(cb, label);
+        openTabsList.appendChild(row);
+      }
+    }
+
+    openTabsSub.append(openTabsList);
+
+    openTabsCheckbox.addEventListener("change", () => {
+      openTabsSub.style.display = openTabsCheckbox.checked ? "flex" : "none";
+    });
+
+    openTabsWrap.append(openTabsRow, openTabsSub);
+    basicContent.append(openTabsWrap);
+
+    // Q: "Did you expect the assistant to read other (non-tab) pages?"
+    //   Maps to groundtruth.tools += { name: "get_page_content", args: { url_list } }
+    //   This is an ADDITIONAL entry, separate from the get_page_content the
+    //   open-tabs question may emit — different intent (open tabs vs. URLs
+    //   the user typed in).
+    const otherPagesWrap = doc.createElement("div");
+    Object.assign(otherPagesWrap.style, { display: "flex", flexDirection: "column", gap: "8px" });
+
+    const otherPagesRow = doc.createElement("div");
+    Object.assign(otherPagesRow.style, {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: "8px",
+      fontSize: "13px",
+      lineHeight: "1.4",
+    });
+
+    const otherPagesCheckbox = doc.createElement("input");
+    otherPagesCheckbox.type = "checkbox";
+    otherPagesCheckbox.id = "basic-q-other-pages";
+    Object.assign(otherPagesCheckbox.style, { margin: "3px 0 0 0", flexShrink: "0" });
+
+    const otherPagesLabel = doc.createElement("label");
+    otherPagesLabel.setAttribute("for", "basic-q-other-pages");
+    otherPagesLabel.textContent = "Did you expect the SmartWindow assistant to read content from any other web pages you do NOT have open in a tab to answer your question (i.e. summarizing a website, comparing products across pages, etc.)?";
+    Object.assign(otherPagesLabel.style, { margin: "0", fontWeight: "500", color: "#1c1b22", cursor: "pointer" });
+
+    otherPagesRow.append(otherPagesCheckbox, otherPagesLabel);
+
+    const otherPagesSub = doc.createElement("div");
+    Object.assign(otherPagesSub.style, {
+      display: "none",
+      flexDirection: "column",
+      gap: "6px",
+      marginLeft: "24px",
+      paddingLeft: "8px",
+      borderLeft: "2px solid #d0d0d8",
+    });
+
+    const otherPagesHeaderRow = doc.createElement("div");
+    Object.assign(otherPagesHeaderRow.style, { display: "flex", alignItems: "center", gap: "6px" });
+
+    const otherPagesHeaderLabel = doc.createElement("label");
+    otherPagesHeaderLabel.textContent = "URLs the assistant should have read";
+    Object.assign(otherPagesHeaderLabel.style, { fontSize: "12px", fontWeight: "500", color: "#1c1b22", margin: "0" });
+
+    const otherPagesAddBtn = doc.createElement("button");
+    otherPagesAddBtn.textContent = "+";
+    Object.assign(otherPagesAddBtn.style, {
+      padding: "1px 7px",
+      borderRadius: "4px",
+      border: "1px solid #ccc",
+      background: "#2c2c32",
+      cursor: "pointer",
+      fontSize: "13px",
+    });
+
+    otherPagesHeaderRow.append(otherPagesHeaderLabel, otherPagesAddBtn);
+
+    const otherPagesContainer = doc.createElement("div");
+    Object.assign(otherPagesContainer.style, { display: "flex", flexDirection: "column", gap: "6px" });
+
+    const addOtherPageRowDialog = () => {
+      const row = doc.createElement("div");
+      Object.assign(row.style, { display: "flex", gap: "6px" });
+
+      const input = doc.createElement("input");
+      input.type = "text";
+      input.className = "basic-other-page-input";
+      input.placeholder = "https://…";
+      Object.assign(input.style, { ...inputStyle, flex: "1", fontSize: "13px" });
+
+      const removeBtn = doc.createElement("button");
+      removeBtn.textContent = "×";
+      Object.assign(removeBtn.style, {
+        padding: "4px 8px",
+        borderRadius: "4px",
+        border: "1px solid #ccc",
+        background: "#bb0b0b",
+        cursor: "pointer",
+        fontSize: "13px",
+        flexShrink: "0",
+      });
+      removeBtn.addEventListener("click", () => {
+        if (otherPagesContainer.children.length > 1) row.remove();
+      });
+
+      row.append(input, removeBtn);
+      otherPagesContainer.appendChild(row);
+      input.focus();
+    };
+
+    otherPagesAddBtn.addEventListener("click", addOtherPageRowDialog);
+    addOtherPageRowDialog();
+
+    otherPagesSub.append(otherPagesHeaderRow, otherPagesContainer);
+
+    otherPagesCheckbox.addEventListener("change", () => {
+      otherPagesSub.style.display = otherPagesCheckbox.checked ? "flex" : "none";
+    });
+
+    otherPagesWrap.append(otherPagesRow, otherPagesSub);
+    basicContent.append(otherPagesWrap);
+
+    // Q: "Did you expect the assistant to search your browsing history?"
+    //   Maps to groundtruth.tools += { name: "search_browsing_history", args: { query } }
+    const historyWrap = doc.createElement("div");
+    Object.assign(historyWrap.style, { display: "flex", flexDirection: "column", gap: "8px" });
+
+    const historyRow = doc.createElement("div");
+    Object.assign(historyRow.style, {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: "8px",
+      fontSize: "13px",
+      lineHeight: "1.4",
+    });
+
+    const historyCheckbox = doc.createElement("input");
+    historyCheckbox.type = "checkbox";
+    historyCheckbox.id = "basic-q-browsing-history";
+    Object.assign(historyCheckbox.style, { margin: "3px 0 0 0", flexShrink: "0" });
+
+    const historyLabel = doc.createElement("label");
+    historyLabel.setAttribute("for", "basic-q-browsing-history");
+    historyLabel.textContent = "Did you expect the SmartWindow assistant to search through or reference your browsing history to answer your question?";
+    Object.assign(historyLabel.style, { margin: "0", fontWeight: "500", color: "#1c1b22", cursor: "pointer" });
+
+    historyRow.append(historyCheckbox, historyLabel);
+
+    const historySub = doc.createElement("div");
+    Object.assign(historySub.style, {
+      display: "none",
+      flexDirection: "column",
+      gap: "8px",
+      marginLeft: "24px",
+      paddingLeft: "8px",
+      borderLeft: "2px solid #d0d0d8",
+    });
+
+    // Helper for one label+input field within historySub.
+    const subFieldStyle = { display: "flex", flexDirection: "column", gap: "4px" };
+    const subLabelStyle = { fontSize: "12px", fontWeight: "500", color: "#1c1b22", margin: "0" };
+
+    const historySearchTermField = doc.createElement("div");
+    Object.assign(historySearchTermField.style, subFieldStyle);
+
+    const historySearchTermLabel = doc.createElement("label");
+    historySearchTermLabel.setAttribute("for", "basic-q-history-search-term");
+    historySearchTermLabel.textContent = "What did you expect it to search for in your browsing history?";
+    Object.assign(historySearchTermLabel.style, subLabelStyle);
+
+    const historySearchTermInput = doc.createElement("input");
+    historySearchTermInput.type = "text";
+    historySearchTermInput.id = "basic-q-history-search-term";
+    historySearchTermInput.placeholder = "Browsing history search term…";
+    Object.assign(historySearchTermInput.style, { ...inputStyle, fontSize: "13px" });
+
+    historySearchTermField.append(historySearchTermLabel, historySearchTermInput);
+
+    // datetime-local doesn't work in chrome:// (see CLAUDE.md), so use a
+    // text input with the iso-datetime format as the placeholder — matches
+    // the expert dialog's iso-datetime tool-arg input.
+    const historyStartTsField = doc.createElement("div");
+    Object.assign(historyStartTsField.style, subFieldStyle);
+
+    const historyStartTsLabel = doc.createElement("label");
+    historyStartTsLabel.setAttribute("for", "basic-q-history-start-ts");
+    historyStartTsLabel.textContent = "Start Datetime";
+    Object.assign(historyStartTsLabel.style, subLabelStyle);
+
+    const historyStartTsInput = doc.createElement("input");
+    historyStartTsInput.type = "text";
+    historyStartTsInput.id = "basic-q-history-start-ts";
+    historyStartTsInput.placeholder = "YYYY-MM-DDTHH:MM:SS";
+    Object.assign(historyStartTsInput.style, { ...inputStyle, fontSize: "13px" });
+
+    historyStartTsField.append(historyStartTsLabel, historyStartTsInput);
+
+    const historyEndTsField = doc.createElement("div");
+    Object.assign(historyEndTsField.style, subFieldStyle);
+
+    const historyEndTsLabel = doc.createElement("label");
+    historyEndTsLabel.setAttribute("for", "basic-q-history-end-ts");
+    historyEndTsLabel.textContent = "End Datetime";
+    Object.assign(historyEndTsLabel.style, subLabelStyle);
+
+    const historyEndTsInput = doc.createElement("input");
+    historyEndTsInput.type = "text";
+    historyEndTsInput.id = "basic-q-history-end-ts";
+    historyEndTsInput.placeholder = "YYYY-MM-DDTHH:MM:SS";
+    Object.assign(historyEndTsInput.style, { ...inputStyle, fontSize: "13px" });
+
+    historyEndTsField.append(historyEndTsLabel, historyEndTsInput);
+
+    historySub.append(historySearchTermField, historyStartTsField, historyEndTsField);
+
+    historyCheckbox.addEventListener("change", () => {
+      const on = historyCheckbox.checked;
+      historySub.style.display = on ? "flex" : "none";
+      if (on) historySearchTermInput.focus();
+    });
+
+    historyWrap.append(historyRow, historySub);
+    basicContent.append(historyWrap);
+
+    const basicBtnRow = doc.createElement("div");
+    Object.assign(basicBtnRow.style, { display: "flex", justifyContent: "flex-end", gap: "8px" });
+
+    const basicCancelBtn = doc.createElement("button");
+    basicCancelBtn.textContent = "Cancel";
+    Object.assign(basicCancelBtn.style, {
+      padding: "6px 14px",
+      borderRadius: "4px",
+      border: "1px solid #ccc",
+      background: "#2c2c32",
+      cursor: "pointer",
+      fontSize: "13px",
+    });
+    basicCancelBtn.addEventListener("click", () => finish(null));
+
+    const basicSaveBtn = doc.createElement("button");
+    basicSaveBtn.textContent = "Save";
+    Object.assign(basicSaveBtn.style, {
+      padding: "6px 14px",
+      borderRadius: "4px",
+      border: "none",
+      background: "#0060df",
+      color: "#fff",
+      cursor: "pointer",
+      fontSize: "13px",
+    });
+    basicSaveBtn.addEventListener("click", () => {
+      const expectedOpenTabUrls = Array.from(
+        openTabsList.querySelectorAll(".basic-tab-input")
+      ).filter(cb => cb.checked).map(cb => cb.dataset.url).filter(Boolean);
+
+      const otherPageUrls = Array.from(
+        otherPagesContainer.querySelectorAll(".basic-other-page-input")
+      ).map(i => i.value.trim()).filter(Boolean);
+
+      const basicTaggedMemoryIds = Array.from(
+        basicTaggedMemoriesList.querySelectorAll(".basic-memory-input")
+      ).filter(cb => cb.checked).map(cb => cb.value);
+
+      finish({
+        mode: "basic",
+        expectedBehavior: basicExpectedBehaviorTextarea.value.trim(),
+        expectedTaggedMemories: basicTaggedMemoriesCheckbox.checked,
+        taggedMemoryIds: basicTaggedMemoryIds,
+        sensitiveTopic: basicSensitiveTopicCheckbox.checked,
+        followups: basicFollowupsCheckbox.checked,
+        expectedWebSearch: webSearchCheckbox.checked,
+        searchQuery: searchQueryInput.value.trim(),
+        expectedOpenTabs: openTabsCheckbox.checked,
+        expectedOpenTabUrls,
+        expectedOtherPages: otherPagesCheckbox.checked,
+        otherPageUrls,
+        expectedBrowsingHistory: historyCheckbox.checked,
+        browsingHistorySearchTerm: historySearchTermInput.value.trim(),
+        browsingHistoryStartTs: historyStartTsInput.value.trim(),
+        browsingHistoryEndTs: historyEndTsInput.value.trim(),
+      });
+    });
+
+    basicBtnRow.append(basicCancelBtn, basicSaveBtn);
+    basicView.append(basicContent, basicBtnRow);
+
+    dialog.append(dialogHeader, basicView, expertView);
     overlay.appendChild(dialog);
     doc.body.appendChild(overlay);
     textarea.focus();
@@ -1073,8 +1954,8 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
   }
 
   // Pull user-mocked system prompts to make sure they're skipped in user message counts
-  const realTimeInfoPromptTemplate = await engine.loadPrompt(lazy.MODEL_FEATURES.REAL_TIME_CONTEXT_DATE);
-  const relevantMemoriesPromptTemplate = await engine.loadPrompt(lazy.MODEL_FEATURES.MEMORIES_RELEVANT_CONTEXT)
+  const realTimeInfoPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.REAL_TIME_CONTEXT_DATE);
+  const relevantMemoriesPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.MEMORIES_RELEVANT_CONTEXT)
 
   // Create messages list
   for (const msgIdx in compactedMessages) {
@@ -1179,6 +2060,141 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
 }
 
 /**
+ * Translate basic-view question answers into the eval `groundtruth` shape.
+ *
+ * Each basic-view question maps to a slice of groundtruth. Returns null if no
+ * answers map to any groundtruth (i.e. the user left every question blank).
+ *
+ * Expected-behavior textarea → groundtruth.user_journey.expected_behavior
+ * Tagged-memories checkbox + per-memory checks → groundtruth.tagged_memories = [memoryId, ...]
+ *   (only emitted if the main checkbox is on AND at least one memory is checked)
+ * Sensitive-topic checkbox → groundtruth.sensitive_topic_disclaimers = { is_sensitive: true }
+ * Follow-ups checkbox → groundtruth.followups = []
+ * Web-search checkbox + query → groundtruth.tools += { name: "run_search", args: { query } }
+ * Open-tabs checkbox → groundtruth.tools += { name: "get_open_tabs", args: {} }
+ * Open-tabs checked tabs → groundtruth.tools += { name: "get_page_content", args: { url_list } }
+ * Other-pages checkbox + URL list → groundtruth.tools += { name: "get_page_content", args: { url_list } }
+ *   (a SEPARATE entry from the open-tabs one, even when both produce
+ *   get_page_content — they capture different intents)
+ * Browsing-history checkbox + search term + start/end datetimes
+ *   → groundtruth.tools += { name: "search_browsing_history",
+ *                            args: { searchTerm, startTs, endTs } }
+ */
+function buildBasicGroundtruth(options) {
+  const groundtruth = {};
+  const tools = [];
+
+  if (options.expectedBehavior?.trim()) {
+    groundtruth.user_journey = { expected_behavior: options.expectedBehavior.trim() };
+  }
+
+  if (options.expectedTaggedMemories
+      && Array.isArray(options.taggedMemoryIds)
+      && options.taggedMemoryIds.length) {
+    groundtruth.tagged_memories = options.taggedMemoryIds;
+  }
+
+  if (options.sensitiveTopic) {
+    groundtruth.sensitive_topic_disclaimers = { is_sensitive: true };
+  }
+
+  if (options.followups) {
+    groundtruth.followups = [];
+  }
+
+  if (options.expectedWebSearch) {
+    const args = {};
+    if (options.searchQuery?.trim()) args.query = options.searchQuery.trim();
+    tools.push({ name: "run_search", args });
+  }
+
+  if (options.expectedOpenTabs) {
+    // Checking the box always asserts the assistant should have called
+    // get_open_tabs (which takes no arguments).
+    tools.push({ name: "get_open_tabs", args: {} });
+
+    // If specific tabs were checked, also assert the assistant should have
+    // fetched their content via get_page_content.
+    if (Array.isArray(options.expectedOpenTabUrls) && options.expectedOpenTabUrls.length) {
+      tools.push({ name: "get_page_content", args: { url_list: options.expectedOpenTabUrls } });
+    }
+  }
+
+  // Separate get_page_content entry for URLs the user typed in (pages they
+  // expected the assistant to read that are not currently open in tabs).
+  // Intentionally an additional groundtruth entry rather than merging with
+  // the open-tabs one.
+  if (options.expectedOtherPages
+      && Array.isArray(options.otherPageUrls)
+      && options.otherPageUrls.length) {
+    tools.push({ name: "get_page_content", args: { url_list: options.otherPageUrls } });
+  }
+
+  if (options.expectedBrowsingHistory) {
+    const args = {};
+    if (options.browsingHistorySearchTerm?.trim()) args.searchTerm = options.browsingHistorySearchTerm.trim();
+    if (options.browsingHistoryStartTs?.trim()) args.startTs = options.browsingHistoryStartTs.trim();
+    if (options.browsingHistoryEndTs?.trim()) args.endTs = options.browsingHistoryEndTs.trim();
+    tools.push({ name: "search_browsing_history", args });
+  }
+
+  if (tools.length) groundtruth.tools = tools;
+
+  return Object.keys(groundtruth).length ? groundtruth : null;
+}
+
+/**
+ * Collection function for the basic (non-expert) export view. Produces the
+ * same export shape as collectSmartWindowData — the difference is in *how*
+ * the groundtruth is built: instead of raw groundtruth inputs, the basic
+ * view passes answers to plain-language questions that we translate here.
+ *
+ * @param {object} options - Answers from the basic view's questions.
+ * @returns {object} - SmartWindow data in the standard export shape.
+ */
+async function collectBasicSmartWindowData(options = {}) {
+  const groundtruth = buildBasicGroundtruth(options);
+  return collectSmartWindowData({ groundtruth });
+}
+
+/**
+ * Basic export — opens the file picker, collects basic SmartWindow data, and
+ * writes it to JSON. Parallel to doExport for the expert flow so the two can
+ * evolve independently.
+ */
+async function doBasicExport(browsingContext, options = {}) {
+  const fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
+  fp.init(browsingContext, "Export SmartWindow Data", Ci.nsIFilePicker.modeSave);
+  fp.defaultExtension = "json";
+  fp.defaultString = "smartwindow-export.json";
+  fp.appendFilter("JSON Files", "*.json");
+  fp.appendFilters(Ci.nsIFilePicker.filterAll);
+
+  const result = await new Promise(resolve => fp.open(resolve));
+  if (result !== Ci.nsIFilePicker.returnOK && result !== Ci.nsIFilePicker.returnReplace) {
+    return { saved: false, reason: "cancelled" };
+  }
+
+  const rawData = await collectBasicSmartWindowData(options);
+  const data = JSON.stringify(rawData, null, 2);
+
+  const file = fp.file;
+  const foStream = Cc["@mozilla.org/network/file-output-stream;1"].createInstance(
+    Ci.nsIFileOutputStream
+  );
+  foStream.init(file, 0x02 | 0x08 | 0x20, 0o644, 0);
+
+  const converter = Cc["@mozilla.org/intl/converter-output-stream;1"].createInstance(
+    Ci.nsIConverterOutputStream
+  );
+  converter.init(foStream, "UTF-8");
+  converter.writeString(data);
+  converter.close();
+
+  return { saved: true, path: file.path };
+}
+
+/**
  * Open the file picker, gather SmartWindow information based on user parameters, and save to a JSON file
  */
 async function doExport(browsingContext, { notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "" } = {}) {
@@ -1250,7 +2266,8 @@ function attachButton(aiWindowBrowser) {
   btn.addEventListener("click", async () => {
     const result = await showExportDialog(doc);
     if (result === null) return;
-    doExport(aiWindowBrowser.browsingContext, result).catch(e =>
+    const exportFn = result.mode === "basic" ? doBasicExport : doExport;
+    exportFn(aiWindowBrowser.browsingContext, result).catch(e =>
       console.error("SmartWindow export failed:", e)
     );
   });
@@ -1497,8 +2514,8 @@ async function countUserMessages() {
       lazy.MODEL_FEATURES.CHAT,
       `FOR_USER_COUNT-${conversation.id}`
     );
-    const realTimeInfoPromptTemplate = await engine.loadPrompt(lazy.MODEL_FEATURES.REAL_TIME_CONTEXT_DATE);
-    const relevantMemoriesPromptTemplate = await engine.loadPrompt(lazy.MODEL_FEATURES.MEMORIES_RELEVANT_CONTEXT);
+    const realTimeInfoPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.REAL_TIME_CONTEXT_DATE);
+    const relevantMemoriesPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.MEMORIES_RELEVANT_CONTEXT);
 
     let count = 0;
     for (const msg of compactedMessages) {
@@ -1512,6 +2529,152 @@ async function countUserMessages() {
   } catch (e) {
     console.warn("[smartwindow] countUserMessages failed:", e);
     return 0;
+  }
+}
+
+/**
+ * Slice the *raw* conversation (integer roles: 0=user, 1=assistant) to just
+ * the assistant messages that come after the last user message. The basic
+ * view's raw-conversation pre-fills (tagged memories, follow-ups) all share
+ * this filter — `memoriesApplied` and `followUpSuggestions` only live on
+ * raw assistant messages, not on the openAI-format conversion. Mirrors
+ * getPostUserRawAssistantMessages in popup.js.
+ */
+function getPostUserRawAssistantMessages(raw) {
+  if (!Array.isArray(raw) || !raw.length) return [];
+  let lastUserIdx = -1;
+  for (let i = raw.length - 1; i >= 0; i--) {
+    if (raw[i]?.role === 0) { lastUserIdx = i; break; }
+  }
+  const subsequent = lastUserIdx === -1 ? raw : raw.slice(lastUserIdx + 1);
+  return subsequent.filter(m => m?.role === 1);
+}
+
+/**
+ * Slice the compacted conversation to just the assistant + tool messages
+ * that come after the last user message. The basic view's pre-fill logic
+ * only looks at this window — it represents what the assistant did in
+ * response to the latest user turn, which is the turn the export is scored
+ * against. Mirrors getPostUserAssistantToolMessages in popup.js.
+ */
+function getPostUserAssistantToolMessages(compacted) {
+  if (!Array.isArray(compacted)) return [];
+  let lastUserIdx = -1;
+  for (let i = compacted.length - 1; i >= 0; i--) {
+    if (compacted[i]?.role === "user") { lastUserIdx = i; break; }
+  }
+  const after = lastUserIdx === -1 ? compacted : compacted.slice(lastUserIdx + 1);
+  return after.filter(m => m?.role === "assistant" || m?.role === "tool");
+}
+
+function parseToolCallArgs(tc) {
+  const raw = tc.function?.arguments;
+  if (raw == null || raw === "") return {};
+  if (typeof raw === "object") return raw;
+  try { return JSON.parse(raw); } catch { return {}; }
+}
+
+/**
+ * Find the first assistant tool call to `toolName` in `messages` and return
+ * its parsed arguments object. Returns `null` if no such call exists, or `{}`
+ * if the call has no arguments. OpenAI tool-call `arguments` are a JSON
+ * string at the wire level, so we parse them here. Mirrors getToolCallArgs
+ * in popup.js.
+ */
+function getToolCallArgs(messages, toolName) {
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !Array.isArray(msg.tool_calls)) continue;
+    const tc = msg.tool_calls.find(tc => tc?.function?.name === toolName);
+    if (tc) return parseToolCallArgs(tc);
+  }
+  return null;
+}
+
+/**
+ * Like getToolCallArgs but returns the parsed args of every call to
+ * `toolName` across the messages (in conversation order). Useful when the
+ * model can call the same tool more than once in a single turn — e.g.
+ * get_page_content with different url_lists. Mirrors getAllToolCallArgs
+ * in popup.js.
+ */
+function getAllToolCallArgs(messages, toolName) {
+  const all = [];
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !Array.isArray(msg.tool_calls)) continue;
+    for (const tc of msg.tool_calls) {
+      if (tc?.function?.name === toolName) all.push(parseToolCallArgs(tc));
+    }
+  }
+  return all;
+}
+
+/**
+ * Return the raw ChatConversation messages — the same `conversation.messages`
+ * that collectSmartWindowData embeds under `conversation.raw`. Used by the
+ * basic-view tagged-memories pre-fill, which needs the per-message
+ * `memoriesApplied` metadata (lost in the openAI-format conversion).
+ *
+ * Note: roles here are integers — `0` = user, `1` = assistant.
+ */
+function getRawConversation() {
+  const win = windowMediator.getMostRecentWindow("navigator:browser");
+  const conversation = lazy.AIWindow.getActiveConversation(win);
+  if (!conversation) return [];
+  return Array.from(conversation.messages ?? []);
+}
+
+/**
+ * Snapshot the open tabs in the most recent browser window in a shape the
+ * basic-view UI can render. Mirrors the tabs collection inside
+ * collectSmartWindowData (sans `lastAccessed`, which the UI doesn't need).
+ */
+function getOpenTabs() {
+  const win = windowMediator.getMostRecentWindow("navigator:browser");
+  if (!win?.gBrowser) return [];
+  return Array.from(win.gBrowser.tabs).map(tab => ({
+    url: tab.linkedBrowser?.currentURI?.spec ?? null,
+    title: tab.label ?? null,
+    isActiveTab: tab.selected,
+  }));
+}
+
+/**
+ * Get the compacted SmartWindow conversation messages with auto-injected
+ * system/user messages (system prompt, real-time-context, relevant-memories)
+ * filtered out. Mirrors the filtering used in collectSmartWindowData's
+ * eval_format build so the basic view sees the same canonical message list
+ * the eval framework would.
+ *
+ * Returned shape is the openAI-format message list: [{role, content, ...}].
+ * Returns [] if no conversation/engine is available.
+ *
+ * @returns {Promise<Array<object>>}
+ */
+async function getCompactedConversation() {
+  try {
+    const win = windowMediator.getMostRecentWindow("navigator:browser");
+    const conversation = lazy.AIWindow.getActiveConversation(win);
+    if (!conversation) return [];
+
+    const openAIFormatMessages = conversation.getMessagesInOpenAiFormat();
+    const compactedMessages = lazy.compactMessages(openAIFormatMessages);
+
+    const engine = await lazy.openAIEngine.build(
+      lazy.MODEL_FEATURES.CHAT,
+      `FOR_COMPACTED-${conversation.id}`
+    );
+    const realTimeInfoPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.REAL_TIME_CONTEXT_DATE);
+    const relevantMemoriesPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.MEMORIES_RELEVANT_CONTEXT);
+
+    return compactedMessages.filter(msg => {
+      if (msg.role === "system") return false;
+      if (msg.role === "user" && msg.content?.slice(0, 100) === realTimeInfoPromptTemplate.slice(0, 100)) return false;
+      if (msg.role === "user" && msg.content?.slice(0, 100) === relevantMemoriesPromptTemplate.slice(0, 100)) return false;
+      return true;
+    });
+  } catch (e) {
+    console.warn("[smartwindow] getCompactedConversation failed:", e);
+    return [];
   }
 }
 
@@ -1576,9 +2739,26 @@ this.smartwindow = class extends ExtensionAPI {
             return countUserMessages();
           },
 
+          async getCompactedConversation() {
+            return getCompactedConversation();
+          },
+
+          async getRawConversation() {
+            return getRawConversation();
+          },
+
+          async getOpenTabs() {
+            return getOpenTabs();
+          },
+
           async exportToFile({ notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "" } = {}) {
             const chromeWindow = windowMediator.getMostRecentWindow("navigator:browser");
             return doExport(chromeWindow.browsingContext, { notes, bugzillaUrls, tags, groundtruth, startDate, endDate });
+          },
+
+          async basicExportToFile(options = {}) {
+            const chromeWindow = windowMediator.getMostRecentWindow("navigator:browser");
+            return doBasicExport(chromeWindow.browsingContext, options);
           },
 
           async triggerExport() {
@@ -1606,6 +2786,9 @@ this.smartwindow = class extends ExtensionAPI {
             const result = await showExportDialog(doc);
             if (!result) return { saved: false, reason: "cancelled" };
 
+            if (result.mode === "basic") {
+              return doBasicExport(win.browsingContext, result);
+            }
             return doExport(win.browsingContext, result);
           },
         },

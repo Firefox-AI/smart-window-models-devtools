@@ -7,6 +7,110 @@
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
+  <div class="dialog-header">
+    <label class="expert-toggle">
+      <span>Expert mode</span>
+      <span class="toggle-switch">
+        <input type="checkbox" id="expert-mode-toggle" />
+        <span class="toggle-switch-track"></span>
+      </span>
+    </label>
+  </div>
+
+  <div id="basic-view">
+    <div class="basic-view-content">
+      <div class="basic-question">
+        <label for="basic-q-expected-behavior">Write 1 to 3 sentences describing what you expected the SmartWindow assistant to do</label>
+        <textarea id="basic-q-expected-behavior" rows="3" placeholder="I expected the assistant to…"></textarea>
+      </div>
+      <div class="basic-question">
+        <div class="basic-question-row">
+          <input type="checkbox" id="basic-q-tagged-memories" />
+          <label for="basic-q-tagged-memories">Did you expect the assistant to mention any of the topics below that it has learned about you?</label>
+        </div>
+        <div class="basic-question-sub hidden" id="basic-q-tagged-memories-sub">
+          <div id="basic-q-tagged-memories-list" class="basic-memory-list">
+            <div class="basic-memory-list-empty">Loading memories…</div>
+          </div>
+        </div>
+      </div>
+      <div class="basic-question">
+        <div class="basic-question-row">
+          <input type="checkbox" id="basic-q-sensitive-topic" />
+          <label for="basic-q-sensitive-topic">Did you ask the assistant about any topic that would require consulting a professional (i.e. legal, medical, etc.)?</label>
+        </div>
+      </div>
+      <div class="basic-question">
+        <div class="basic-question-row">
+          <input type="checkbox" id="basic-q-followups" />
+          <label for="basic-q-followups">Did the assistant suggest any follow-ups to continue the conversation, either in its response or as bubbles below it?</label>
+        </div>
+      </div>
+      <div class="basic-question">
+        <div class="basic-question-row">
+          <input type="checkbox" id="basic-q-web-search" />
+          <label for="basic-q-web-search">Did you expect the SmartWindow assistant to search the web for you?</label>
+        </div>
+        <div class="basic-question-sub hidden" id="basic-q-web-search-sub">
+          <label for="basic-q-search-query">What did you expect it to search for?</label>
+          <input type="text" id="basic-q-search-query" placeholder="Search query…" />
+        </div>
+      </div>
+      <div class="basic-question">
+        <div class="basic-question-row">
+          <input type="checkbox" id="basic-q-open-tabs" />
+          <label for="basic-q-open-tabs">Did you expect the SmartWindow assistant to show you, list, use, or reference your currently opened tabs to answer your question?</label>
+        </div>
+        <div class="basic-question-sub hidden" id="basic-q-open-tabs-sub">
+          <div id="basic-q-open-tabs-list" class="basic-tab-list">
+            <div class="basic-tab-list-empty">Loading tabs…</div>
+          </div>
+        </div>
+      </div>
+      <div class="basic-question">
+        <div class="basic-question-row">
+          <input type="checkbox" id="basic-q-other-pages" />
+          <label for="basic-q-other-pages">Did you expect the SmartWindow assistant to read content from any other web pages you do NOT have open in a tab to answer your question (i.e. summarizing a website, comparing products across pages, etc.)?</label>
+        </div>
+        <div class="basic-question-sub hidden" id="basic-q-other-pages-sub">
+          <div class="basic-url-list-header">
+            <label>URLs the assistant should have read</label>
+            <button type="button" id="basic-q-other-pages-add-btn" class="icon-btn">+</button>
+          </div>
+          <div id="basic-q-other-pages-container" class="basic-url-list">
+            <div class="basic-url-row">
+              <input type="text" class="basic-other-page-input" placeholder="https://…" />
+              <button type="button" class="remove-btn icon-btn">×</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="basic-question">
+        <div class="basic-question-row">
+          <input type="checkbox" id="basic-q-browsing-history" />
+          <label for="basic-q-browsing-history">Did you expect the SmartWindow assistant to search through or reference your browsing history to answer your question?</label>
+        </div>
+        <div class="basic-question-sub hidden" id="basic-q-browsing-history-sub">
+          <div class="basic-sub-field">
+            <label for="basic-q-history-search-term">What did you expect it to search for in your browsing history?</label>
+            <input type="text" id="basic-q-history-search-term" placeholder="Browsing history search term…" />
+          </div>
+          <div class="basic-sub-field">
+            <label for="basic-q-history-start-ts">Start Datetime</label>
+            <input type="datetime-local" id="basic-q-history-start-ts" step="1" />
+          </div>
+          <div class="basic-sub-field">
+            <label for="basic-q-history-end-ts">End Datetime</label>
+            <input type="datetime-local" id="basic-q-history-end-ts" step="1" />
+          </div>
+        </div>
+      </div>
+    </div>
+    <button id="basic-export-btn">Export to File…</button>
+    <div id="basic-status" class="status hidden"></div>
+  </div>
+
+  <div id="expert-view" class="hidden">
   <div class="columns">
     <div class="column column-left">
       <div class="field-group">
@@ -104,6 +208,7 @@
 
   <button id="export-btn">Export to File…</button>
   <div id="status" class="status hidden"></div>
+  </div>
 
   <script src="popup.js"></script>
 </body>

@@ -8,8 +8,247 @@ body {
   margin: 0;
   padding: 16px;
   width: 720px;
+  max-height: 580px;
+  overflow-y: auto;
   color: #1c1b22;
   background: #fff;
+}
+
+.dialog-header {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.expert-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #1c1b22;
+  cursor: pointer;
+  margin-bottom: 0;
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+}
+
+.toggle-switch-track {
+  position: absolute;
+  inset: 0;
+  background-color: #c0c0c8;
+  border-radius: 18px;
+  transition: background-color 0.15s ease;
+  cursor: pointer;
+}
+
+.toggle-switch-track::before {
+  content: "";
+  position: absolute;
+  height: 14px;
+  width: 14px;
+  left: 2px;
+  top: 2px;
+  background-color: #fff;
+  border-radius: 50%;
+  transition: transform 0.15s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-switch input:checked + .toggle-switch-track {
+  background-color: #0060df;
+}
+
+.toggle-switch input:checked + .toggle-switch-track::before {
+  transform: translateX(14px);
+}
+
+.toggle-switch input:focus-visible + .toggle-switch-track {
+  outline: 2px solid #0060df;
+  outline-offset: 2px;
+}
+
+.basic-view-content {
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.basic-question {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.basic-question > label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #1c1b22;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.basic-question textarea {
+  font-size: 13px;
+  resize: vertical;
+}
+
+.basic-question-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.basic-question-row input[type="checkbox"] {
+  margin: 3px 0 0 0;
+  flex-shrink: 0;
+}
+
+.basic-question-row label {
+  margin: 0;
+  font-weight: 500;
+  color: #1c1b22;
+  cursor: pointer;
+}
+
+.basic-question-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-left: 24px;
+  padding-left: 8px;
+  border-left: 2px solid #d0d0d8;
+}
+
+.basic-question-sub label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #1c1b22;
+  margin: 0;
+}
+
+.basic-question-sub input[type="text"],
+.basic-question-sub input[type="datetime-local"] {
+  font-size: 13px;
+}
+
+.basic-sub-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.basic-sub-field + .basic-sub-field {
+  margin-top: 6px;
+}
+
+.basic-tab-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.basic-tab-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.basic-tab-row input[type="checkbox"] {
+  margin: 2px 0 0 0;
+  flex-shrink: 0;
+}
+
+.basic-tab-row label {
+  margin: 0;
+  font-weight: 400;
+  color: #1c1b22;
+  cursor: pointer;
+  word-break: break-word;
+}
+
+.basic-tab-list-empty {
+  font-size: 12px;
+  color: #5b5b66;
+  font-style: italic;
+}
+
+.basic-memory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.basic-memory-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.basic-memory-row input[type="checkbox"] {
+  margin: 2px 0 0 0;
+  flex-shrink: 0;
+}
+
+.basic-memory-row label {
+  margin: 0;
+  font-weight: 400;
+  color: #1c1b22;
+  cursor: pointer;
+}
+
+.basic-memory-list-empty {
+  font-size: 12px;
+  color: #5b5b66;
+  font-style: italic;
+}
+
+.basic-url-list-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.basic-url-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.basic-url-row {
+  display: flex;
+  gap: 6px;
+}
+
+.basic-url-row input[type="text"] {
+  flex: 1;
+  font-size: 13px;
 }
 
 .columns {
@@ -32,6 +271,7 @@ label {
 }
 
 input[type="text"],
+input[type="datetime-local"],
 select,
 textarea {
   width: 100%;

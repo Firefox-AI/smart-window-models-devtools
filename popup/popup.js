@@ -31,10 +31,481 @@ function applyConditionalRequired(tools, ctx) {
   }
 }
 
+/**
+ * Slice the *raw* conversation (integer roles: 0=user, 1=assistant) to just
+ * the assistant messages that come after the last user message. The basic
+ * view's raw-conversation pre-fills (tagged memories, follow-ups) all share
+ * this filter — `memoriesApplied` and `followUpSuggestions` only live on
+ * raw assistant messages, not on the openAI-format conversion.
+ */
+function getPostUserRawAssistantMessages(raw) {
+  if (!Array.isArray(raw) || !raw.length) return [];
+  let lastUserIdx = -1;
+  for (let i = raw.length - 1; i >= 0; i--) {
+    if (raw[i]?.role === 0) { lastUserIdx = i; break; }
+  }
+  const subsequent = lastUserIdx === -1 ? raw : raw.slice(lastUserIdx + 1);
+  return subsequent.filter(m => m?.role === 1);
+}
+
+/**
+ * Slice the compacted conversation to just the assistant + tool messages that
+ * come after the last user message. The basic view's pre-fill logic only
+ * looks at this window — it represents what the assistant did in response to
+ * the latest user turn, which is the turn the export is scored against.
+ */
+function getPostUserAssistantToolMessages(compacted) {
+  if (!Array.isArray(compacted)) return [];
+  let lastUserIdx = -1;
+  for (let i = compacted.length - 1; i >= 0; i--) {
+    if (compacted[i]?.role === "user") { lastUserIdx = i; break; }
+  }
+  const after = lastUserIdx === -1 ? compacted : compacted.slice(lastUserIdx + 1);
+  return after.filter(m => m?.role === "assistant" || m?.role === "tool");
+}
+
+function parseToolCallArgs(tc) {
+  const raw = tc.function?.arguments;
+  if (raw == null || raw === "") return {};
+  if (typeof raw === "object") return raw;
+  try { return JSON.parse(raw); } catch { return {}; }
+}
+
+/**
+ * Find the first assistant tool call to `toolName` in `messages` and return
+ * its parsed arguments object. Returns `null` if no such call exists, or `{}`
+ * if the call has no arguments. OpenAI tool-call `arguments` are a JSON
+ * string at the wire level, so we parse them here.
+ */
+function getToolCallArgs(messages, toolName) {
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !Array.isArray(msg.tool_calls)) continue;
+    const tc = msg.tool_calls.find(tc => tc?.function?.name === toolName);
+    if (tc) return parseToolCallArgs(tc);
+  }
+  return null;
+}
+
+/**
+ * Like getToolCallArgs but returns the parsed args of every call to
+ * `toolName` across the messages (in conversation order). Useful when the
+ * model can call the same tool more than once in a single turn — e.g.
+ * get_page_content with different url_lists.
+ */
+function getAllToolCallArgs(messages, toolName) {
+  const all = [];
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !Array.isArray(msg.tool_calls)) continue;
+    for (const tc of msg.tool_calls) {
+      if (tc?.function?.name === toolName) all.push(parseToolCallArgs(tc));
+    }
+  }
+  return all;
+}
+
 function formatLocalDatetime(date) {
   const pad = n => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
+
+const expertModeToggle = document.getElementById("expert-mode-toggle");
+const expertView = document.getElementById("expert-view");
+const basicView = document.getElementById("basic-view");
+expertModeToggle.addEventListener("change", () => {
+  const expert = expertModeToggle.checked;
+  expertView.classList.toggle("hidden", !expert);
+  basicView.classList.toggle("hidden", expert);
+});
+
+const basicExportBtn = document.getElementById("basic-export-btn");
+const basicStatusEl = document.getElementById("basic-status");
+const basicExpectedBehaviorTextarea = document.getElementById("basic-q-expected-behavior");
+const basicTaggedMemoriesCheckbox = document.getElementById("basic-q-tagged-memories");
+const basicTaggedMemoriesSub = document.getElementById("basic-q-tagged-memories-sub");
+const basicTaggedMemoriesList = document.getElementById("basic-q-tagged-memories-list");
+const basicSensitiveTopicCheckbox = document.getElementById("basic-q-sensitive-topic");
+const basicFollowupsCheckbox = document.getElementById("basic-q-followups");
+
+basicTaggedMemoriesCheckbox.addEventListener("change", () => {
+  basicTaggedMemoriesSub.classList.toggle("hidden", !basicTaggedMemoriesCheckbox.checked);
+});
+
+// Load memories once on popup open and render the checkbox list. Same
+// shape and source the expert view's tagged-memories control uses. The
+// promise is awaited by the basic-view pre-fill so memory checkboxes
+// exist in the DOM before we try to flip them.
+const memoriesReady = (async () => {
+  try {
+    const memories = await browser.experiments.smartwindow.getMemories();
+    basicTaggedMemoriesList.replaceChildren();
+    if (!memories.length) {
+      const empty = document.createElement("div");
+      empty.textContent = "No memories stored.";
+      empty.className = "basic-memory-list-empty";
+      basicTaggedMemoriesList.appendChild(empty);
+      return;
+    }
+    for (const memory of memories) {
+      const row = document.createElement("div");
+      row.className = "basic-memory-row";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "basic-memory-input";
+      cb.value = memory.id;
+      const label = document.createElement("label");
+      label.textContent = memory.memory_summary;
+      label.addEventListener("click", () => cb.click());
+      row.append(cb, label);
+      basicTaggedMemoriesList.appendChild(row);
+    }
+  } catch (err) {
+    basicTaggedMemoriesList.replaceChildren();
+    const errEl = document.createElement("div");
+    errEl.textContent = `Failed to load memories: ${err.message}`;
+    errEl.className = "basic-memory-list-empty";
+    basicTaggedMemoriesList.appendChild(errEl);
+  }
+})();
+const basicWebSearchCheckbox = document.getElementById("basic-q-web-search");
+const basicWebSearchSub = document.getElementById("basic-q-web-search-sub");
+const basicSearchQueryInput = document.getElementById("basic-q-search-query");
+const basicOpenTabsCheckbox = document.getElementById("basic-q-open-tabs");
+const basicOpenTabsSub = document.getElementById("basic-q-open-tabs-sub");
+const basicOpenTabsList = document.getElementById("basic-q-open-tabs-list");
+const basicOtherPagesCheckbox = document.getElementById("basic-q-other-pages");
+const basicOtherPagesSub = document.getElementById("basic-q-other-pages-sub");
+const basicOtherPagesContainer = document.getElementById("basic-q-other-pages-container");
+const basicOtherPagesAddBtn = document.getElementById("basic-q-other-pages-add-btn");
+const basicHistoryCheckbox = document.getElementById("basic-q-browsing-history");
+const basicHistorySub = document.getElementById("basic-q-browsing-history-sub");
+const basicHistorySearchTermInput = document.getElementById("basic-q-history-search-term");
+const basicHistoryStartTsInput = document.getElementById("basic-q-history-start-ts");
+const basicHistoryEndTsInput = document.getElementById("basic-q-history-end-ts");
+
+basicHistoryCheckbox.addEventListener("change", () => {
+  basicHistorySub.classList.toggle("hidden", !basicHistoryCheckbox.checked);
+  if (basicHistoryCheckbox.checked) basicHistorySearchTermInput.focus();
+});
+
+basicOtherPagesCheckbox.addEventListener("change", () => {
+  basicOtherPagesSub.classList.toggle("hidden", !basicOtherPagesCheckbox.checked);
+});
+
+function addOtherPageRow() {
+  const row = document.createElement("div");
+  row.className = "basic-url-row";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "basic-other-page-input";
+  input.placeholder = "https://…";
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "remove-btn icon-btn";
+  removeBtn.textContent = "×";
+  removeBtn.addEventListener("click", () => {
+    if (basicOtherPagesContainer.children.length > 1) row.remove();
+  });
+  row.append(input, removeBtn);
+  basicOtherPagesContainer.appendChild(row);
+  input.focus();
+}
+
+basicOtherPagesAddBtn.addEventListener("click", addOtherPageRow);
+// Wire up the first row's hardcoded remove button (matches the bug-row / tag-row pattern).
+basicOtherPagesContainer.querySelector(".remove-btn").addEventListener("click", function() {
+  if (basicOtherPagesContainer.children.length > 1) this.parentElement.remove();
+});
+
+basicWebSearchCheckbox.addEventListener("change", () => {
+  basicWebSearchSub.classList.toggle("hidden", !basicWebSearchCheckbox.checked);
+  if (basicWebSearchCheckbox.checked) basicSearchQueryInput.focus();
+});
+
+basicOpenTabsCheckbox.addEventListener("change", () => {
+  basicOpenTabsSub.classList.toggle("hidden", !basicOpenTabsCheckbox.checked);
+});
+
+// Snapshot open tabs once on popup open and render the checkbox list. The
+// list lives inside the hidden sub-element so toggling the question is
+// instantaneous (no loading flash). The promise is awaited by the basic-view
+// pre-fill so it can flip tab checkboxes once they exist in the DOM.
+const openTabsReady = (async () => {
+  try {
+    const tabs = await browser.experiments.smartwindow.getOpenTabs();
+    basicOpenTabsList.replaceChildren();
+    if (!tabs.length) {
+      const empty = document.createElement("div");
+      empty.textContent = "No tabs open.";
+      empty.className = "basic-tab-list-empty";
+      basicOpenTabsList.appendChild(empty);
+      return;
+    }
+    for (const tab of tabs) {
+      const row = document.createElement("div");
+      row.className = "basic-tab-row";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "basic-tab-input";
+      cb.dataset.url = tab.url || "";
+      const label = document.createElement("label");
+      label.textContent = tab.title || tab.url || "(untitled)";
+      label.addEventListener("click", () => cb.click());
+      row.append(cb, label);
+      basicOpenTabsList.appendChild(row);
+    }
+  } catch (err) {
+    basicOpenTabsList.replaceChildren();
+    const errEl = document.createElement("div");
+    errEl.textContent = `Failed to load tabs: ${err.message}`;
+    errEl.className = "basic-tab-list-empty";
+    basicOpenTabsList.appendChild(errEl);
+  }
+})();
+
+// Conversation snapshots the basic view pre-fills questions from. Both are
+// fetched once on popup open; they stay null until their fetches resolve.
+//   - compactedConversation: openAI-format messages (post-PromptOptimizer)
+//   - rawConversation: ChatConversation.messages, used for tagged-memories
+//     pre-fill (carries per-message `memoriesApplied` metadata that's lost
+//     in the openAI-format conversion).
+let compactedConversation = null;
+let rawConversation = null;
+const compactedConversationReady = (async () => {
+  try {
+    [compactedConversation, rawConversation] = await Promise.all([
+      browser.experiments.smartwindow.getCompactedConversation(),
+      browser.experiments.smartwindow.getRawConversation(),
+    ]);
+    // Pre-fill needs DOM checkboxes (open tabs + memories) to exist before
+    // it can flip them, so wait for those renderers too.
+    await Promise.all([openTabsReady, memoriesReady]);
+    prefillBasicView(compactedConversation, rawConversation);
+  } catch (err) {
+    console.warn("Failed to load conversation snapshots:", err);
+    compactedConversation = compactedConversation ?? [];
+    rawConversation = rawConversation ?? [];
+  }
+})();
+
+/**
+ * Pre-fill the basic view's question answers based on what the assistant
+ * actually did in response to the last user turn. Only inspects assistant +
+ * tool messages after the last user message; see getPostUserAssistantToolMessages.
+ */
+const SENSITIVE_TOPIC_DISCLAIMER = "This is not professional advice, but here's how to think about it.";
+
+function prefillBasicView(compacted, raw) {
+  const postMessages = getPostUserAssistantToolMessages(compacted);
+  const userMessageCount = compacted.filter(m => m?.role === "user").length;
+
+  // Tagged-memories + follow-ups questions both inspect the *raw*
+  // conversation's post-last-user assistant messages (the openAI-format
+  // conversion drops `memoriesApplied` and `followUpSuggestions`).
+  const postUserRawAssistants = getPostUserRawAssistantMessages(raw);
+
+  // Tagged-memories: collect every memoriesApplied[].id and check matching
+  // memory rows (plus the main box and reveal the sub-list so the user
+  // sees the pre-fill).
+  const appliedIds = new Set();
+  for (const msg of postUserRawAssistants) {
+    if (!Array.isArray(msg.memoriesApplied)) continue;
+    for (const mem of msg.memoriesApplied) {
+      if (mem?.id) appliedIds.add(mem.id);
+    }
+  }
+  if (appliedIds.size) {
+    basicTaggedMemoriesCheckbox.checked = true;
+    basicTaggedMemoriesSub.classList.remove("hidden");
+    for (const cb of basicTaggedMemoriesList.querySelectorAll(".basic-memory-input")) {
+      if (appliedIds.has(cb.value)) cb.checked = true;
+    }
+  }
+
+  // Follow-ups: if any of those assistant messages has a non-empty
+  // followUpSuggestions list, check the box.
+  const hasFollowups = postUserRawAssistants.some(
+    m => Array.isArray(m.followUpSuggestions) && m.followUpSuggestions.length
+  );
+  if (hasFollowups) {
+    basicFollowupsCheckbox.checked = true;
+  }
+
+  // Sensitive-topic question: if any assistant message after the last user
+  // turn includes the disclaimer string, check the box.
+  const disclaimerSeen = postMessages.some(
+    m => m?.role === "assistant"
+      && typeof m.content === "string"
+      && m.content.includes(SENSITIVE_TOPIC_DISCLAIMER)
+  );
+  if (disclaimerSeen) {
+    basicSensitiveTopicCheckbox.checked = true;
+  }
+
+  // Web-search question: was run_search called? → check the box. On turns 2+,
+  // also reveal the sub-input and pre-fill the query from the tool call. The
+  // `query` arg is only expected on follow-up turns, so on the first user
+  // turn we leave the sub-question hidden.
+  const runSearchArgs = getToolCallArgs(postMessages, "run_search");
+  if (runSearchArgs) {
+    basicWebSearchCheckbox.checked = true;
+    if (userMessageCount >= 2) {
+      basicWebSearchSub.classList.remove("hidden");
+      if (typeof runSearchArgs.query === "string" && runSearchArgs.query.trim()) {
+        basicSearchQueryInput.value = runSearchArgs.query;
+      }
+    }
+  }
+
+  // Open-tabs question: was get_open_tabs called? → check the main box and
+  // reveal the tab sub-list.
+  if (getToolCallArgs(postMessages, "get_open_tabs")) {
+    basicOpenTabsCheckbox.checked = true;
+    basicOpenTabsSub.classList.remove("hidden");
+  }
+
+  // Aggregate every URL the assistant tried to fetch via get_page_content
+  // across all such calls in this turn, then split by whether it's currently
+  // open in a tab:
+  //   - Matches an open tab → check that tab's checkbox under Q3 (open tabs)
+  //   - Not in any open tab → pre-fill Q4 (other pages) URL inputs
+  const pageContentCalls = getAllToolCallArgs(postMessages, "get_page_content");
+  const requestedUrls = pageContentCalls
+    .flatMap(args => Array.isArray(args?.url_list) ? args.url_list : [])
+    .filter(u => typeof u === "string" && u.trim());
+
+  if (requestedUrls.length) {
+    const openTabUrls = new Set(
+      Array.from(basicOpenTabsList.querySelectorAll(".basic-tab-input"))
+        .map(cb => cb.dataset.url)
+        .filter(Boolean)
+    );
+
+    const seen = new Set();
+    const matchingTabUrls = new Set();
+    const otherUrls = [];
+    for (const url of requestedUrls) {
+      if (seen.has(url)) continue;
+      seen.add(url);
+      if (openTabUrls.has(url)) matchingTabUrls.add(url);
+      else otherUrls.push(url);
+    }
+
+    // Q3: check matching tab checkboxes.
+    if (matchingTabUrls.size) {
+      for (const cb of basicOpenTabsList.querySelectorAll(".basic-tab-input")) {
+        if (matchingTabUrls.has(cb.dataset.url)) cb.checked = true;
+      }
+    }
+
+    // Q4: pre-fill the leftover (non-tab) URLs into input rows, check the
+    // box, reveal the sub-section. Fill the existing hardcoded first row
+    // first, then call addOtherPageRow() for any extras.
+    if (otherUrls.length) {
+      const firstInput = basicOtherPagesContainer.querySelector(".basic-other-page-input");
+      firstInput.value = otherUrls[0];
+      for (let i = 1; i < otherUrls.length; i++) {
+        addOtherPageRow();
+        const newInput = basicOtherPagesContainer.lastElementChild.querySelector("input");
+        newInput.value = otherUrls[i];
+      }
+      basicOtherPagesCheckbox.checked = true;
+      basicOtherPagesSub.classList.remove("hidden");
+    }
+  }
+
+  // Browsing-history question: was search_browsing_history called? → check
+  // the box, reveal the sub-section, and pre-fill any of searchTerm /
+  // startTs / endTs that the tool call carried.
+  const historyArgs = getToolCallArgs(postMessages, "search_browsing_history");
+  if (historyArgs) {
+    basicHistoryCheckbox.checked = true;
+    basicHistorySub.classList.remove("hidden");
+    if (typeof historyArgs.searchTerm === "string" && historyArgs.searchTerm.trim()) {
+      basicHistorySearchTermInput.value = historyArgs.searchTerm;
+    }
+    // <input type="datetime-local" step="1"> accepts YYYY-MM-DDTHH:MM[:SS];
+    // strip any fractional-seconds / timezone suffix the conversation might
+    // carry (e.g. ".sssZ") so the picker accepts and displays the value.
+    const normalizeDt = s => {
+      if (typeof s !== "string") return "";
+      const m = s.trim().match(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?/);
+      return m ? m[0] : "";
+    };
+    const startTs = normalizeDt(historyArgs.startTs);
+    if (startTs) basicHistoryStartTsInput.value = startTs;
+    const endTs = normalizeDt(historyArgs.endTs);
+    if (endTs) basicHistoryEndTsInput.value = endTs;
+  }
+}
+
+/**
+ * Template export flow for the basic (non-expert) view.
+ *
+ * TODO: gather the basic-view's form fields and pass them through to the
+ * experiment API. Until the basic view has real inputs, this just calls
+ * basicExportToFile with default/empty params — the same backend entry
+ * point the in-page dialog's basic Save button dispatches to.
+ */
+async function runBasicExport() {
+  basicExportBtn.disabled = true;
+  basicStatusEl.className = "status hidden";
+
+  try {
+    const expectedOpenTabUrls = Array.from(
+      basicOpenTabsList.querySelectorAll(".basic-tab-input:checked")
+    ).map(cb => cb.dataset.url).filter(Boolean);
+
+    const otherPageUrls = Array.from(
+      basicOtherPagesContainer.querySelectorAll(".basic-other-page-input")
+    ).map(i => i.value.trim()).filter(Boolean);
+
+    // Normalize datetime-local value (YYYY-MM-DDTHH:MM or YYYY-MM-DDTHH:MM:SS)
+    // to the iso-datetime format the expert flow emits.
+    const toIsoDatetime = v => {
+      const t = (v || "").trim();
+      if (!t) return "";
+      return /T\d{2}:\d{2}$/.test(t) ? `${t}:00` : t;
+    };
+
+    const taggedMemoryIds = Array.from(
+      basicTaggedMemoriesList.querySelectorAll(".basic-memory-input:checked")
+    ).map(cb => cb.value);
+
+    const options = {
+      expectedBehavior: basicExpectedBehaviorTextarea.value.trim(),
+      expectedTaggedMemories: basicTaggedMemoriesCheckbox.checked,
+      taggedMemoryIds,
+      sensitiveTopic: basicSensitiveTopicCheckbox.checked,
+      followups: basicFollowupsCheckbox.checked,
+      expectedWebSearch: basicWebSearchCheckbox.checked,
+      searchQuery: basicSearchQueryInput.value.trim(),
+      expectedOpenTabs: basicOpenTabsCheckbox.checked,
+      expectedOpenTabUrls,
+      expectedOtherPages: basicOtherPagesCheckbox.checked,
+      otherPageUrls,
+      expectedBrowsingHistory: basicHistoryCheckbox.checked,
+      browsingHistorySearchTerm: basicHistorySearchTermInput.value.trim(),
+      browsingHistoryStartTs: toIsoDatetime(basicHistoryStartTsInput.value),
+      browsingHistoryEndTs: toIsoDatetime(basicHistoryEndTsInput.value),
+    };
+    const result = await browser.experiments.smartwindow.basicExportToFile(options);
+
+    if (result.saved) {
+      basicStatusEl.textContent = `Saved to: ${result.path}`;
+      basicStatusEl.className = "status success";
+    } else {
+      basicStatusEl.textContent = "Export cancelled.";
+      basicStatusEl.className = "status error";
+    }
+  } catch (err) {
+    basicStatusEl.textContent = `Error: ${err.message}`;
+    basicStatusEl.className = "status error";
+  } finally {
+    basicExportBtn.disabled = false;
+  }
+}
+
+basicExportBtn.addEventListener("click", runBasicExport);
 
 const exportBtn = document.getElementById("export-btn");
 const statusEl = document.getElementById("status");

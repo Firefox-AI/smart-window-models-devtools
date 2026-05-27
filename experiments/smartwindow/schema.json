@@ -32,6 +32,27 @@
         "parameters": []
       },
       {
+        "name": "getCompactedConversation",
+        "type": "function",
+        "description": "Returns the compacted SmartWindow conversation messages (post-PromptOptimizer), with auto-injected system/user messages (system prompt, real-time context, relevant memories) filtered out. Used by the basic export view to pre-fill questions based on the conversation.",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "getRawConversation",
+        "type": "function",
+        "description": "Returns the raw ChatConversation messages, untouched by the openAI-format conversion. Roles are integers (0=user, 1=assistant) and assistant messages carry metadata like `memoriesApplied`. Used by the basic export view's tagged-memories pre-fill.",
+        "async": true,
+        "parameters": []
+      },
+      {
+        "name": "getOpenTabs",
+        "type": "function",
+        "description": "Returns the currently open tabs in the most recent browser window — [{url, title, isActiveTab}]. Used by the basic export view to let users pick which tabs they expected the assistant to reference.",
+        "async": true,
+        "parameters": []
+      },
+      {
         "name": "exportToFile",
         "type": "function",
         "description": "Opens a native Save dialog and writes collected data to the chosen file.",
@@ -49,6 +70,20 @@
               "startDate":        { "type": "string", "optional": true },
               "endDate":          { "type": "string", "optional": true }
             }
+          }
+        ]
+      },
+      {
+        "name": "basicExportToFile",
+        "type": "function",
+        "description": "Basic (non-expert) export — opens the Save dialog and writes a slimmed-down SmartWindow data payload. Template entry point; the exact options shape will evolve as the basic view's fields are designed.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "options",
+            "type": "object",
+            "optional": true,
+            "additionalProperties": { "type": "any" }
           }
         ]
       },
