@@ -18,6 +18,8 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "moz-src:///browser/components/aiwindow/models/Tools.sys.mjs",
   loadPrompt:
     "moz-src:///browser/components/aiwindow/models/PromptLoader.sys.mjs",
+  loadCallContext:
+    "moz-src:///browser/components/aiwindow/models/PromptLoader.sys.mjs",
 });
 
 /* Version number of the JSON file schema
@@ -1886,10 +1888,11 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
       lazy.MODEL_FEATURES.CHAT,
       `FOR_DUMP-${conversation.id}`
     );
-    engineConfig = engine.getConfig(lazy.MODEL_FEATURES.CHAT);
+    engineConfig = await lazy.loadCallContext(lazy.MODEL_FEATURES.CHAT);
   } catch (e) {
     engineConfig = { error: String(e) };
   }
+  const chatPrompt = await lazy.loadPrompt(lazy.MODEL_FEATURES.CHAT);
 
   // Collect all open tabs
   const tabs = Array.from(win.gBrowser.tabs).map(tab => ({
@@ -1966,9 +1969,9 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
     // System prompt
     if (msg["role"] === "system") { continue; }
     // Real time context message
-    else if (msg["role"] === "user" && msg["content"].slice(0, 100) === realTimeInfoPromptTemplate.slice(0, 100)) { continue; }
+    else if (msg["role"] === "user" && msg["content"].slice(0, 100) === realTimeInfoPromptTemplate.prompt.slice(0, 100)) { continue; }
     // Relevant memories message
-    else if (msg["role"] === "user" && msg["content"].slice(0, 100) === relevantMemoriesPromptTemplate.slice(0, 100)) { continue; }
+    else if (msg["role"] === "user" && msg["content"].slice(0, 100) === relevantMemoriesPromptTemplate.prompt.slice(0, 100)) { continue; }
 
     // Actual messages we want to capture
     // Add the last user message as the scorable turn; add all other messages only as conversation context
@@ -2024,7 +2027,7 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
         version: appInfo.version,
         buildID: appInfo.appBuildID,
       },
-      openAIEngine: engineConfig,
+      openAIEngine: {...engineConfig, chatPromptVersion: chatPrompt.version},
       locale: Intl.DateTimeFormat().resolvedOptions().locale,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     },
@@ -2521,8 +2524,8 @@ async function countUserMessages() {
     for (const msg of compactedMessages) {
       if (msg.role === "system") continue;
       if (msg.role !== "user") continue;
-      if (msg.content.slice(0, 100) === realTimeInfoPromptTemplate.slice(0, 100)) continue;
-      if (msg.content.slice(0, 100) === relevantMemoriesPromptTemplate.slice(0, 100)) continue;
+      if (msg.content.slice(0, 100) === realTimeInfoPromptTemplate.prompt.slice(0, 100)) continue;
+      if (msg.content.slice(0, 100) === relevantMemoriesPromptTemplate.prompt.slice(0, 100)) continue;
       count++;
     }
     return count;
@@ -2668,8 +2671,8 @@ async function getCompactedConversation() {
 
     return compactedMessages.filter(msg => {
       if (msg.role === "system") return false;
-      if (msg.role === "user" && msg.content?.slice(0, 100) === realTimeInfoPromptTemplate.slice(0, 100)) return false;
-      if (msg.role === "user" && msg.content?.slice(0, 100) === relevantMemoriesPromptTemplate.slice(0, 100)) return false;
+      if (msg.role === "user" && msg.content?.slice(0, 100) === realTimeInfoPromptTemplate.prompt.slice(0, 100)) return false;
+      if (msg.role === "user" && msg.content?.slice(0, 100) === relevantMemoriesPromptTemplate.prompt.slice(0, 100)) return false;
       return true;
     });
   } catch (e) {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Smart Window Model DevTools",
-  "version": "0.3",
+  "version": "0.31",
   "description": "Export SmartWindow model context information to a file for the Firefox AI Models team.",
 
   "permissions": [
