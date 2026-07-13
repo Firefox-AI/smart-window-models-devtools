@@ -6,8 +6,6 @@ ChromeUtils.defineESModuleGetters(lazy, {
   AIWindow: "moz-src:///browser/components/aiwindow/ui/modules/AIWindow.sys.mjs",
   MemoriesManager:
     "moz-src:///browser/components/aiwindow/models/memories/MemoriesManager.sys.mjs",
-  openAIEngine:
-    "moz-src:///browser/components/aiwindow/models/Utils.sys.mjs",
   MODEL_FEATURES:
     "moz-src:///browser/components/aiwindow/models/Utils.sys.mjs",
   compactMessages:
@@ -18,8 +16,14 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "moz-src:///browser/components/aiwindow/models/Tools.sys.mjs",
   loadPrompt:
     "moz-src:///browser/components/aiwindow/models/PromptLoader.sys.mjs",
-  loadCallContext:
+  buildEngineForFeature:
     "moz-src:///browser/components/aiwindow/models/PromptLoader.sys.mjs",
+  FEATURE_PURPOSES:
+    "moz-src:///browser/components/aiwindow/models/PromptLoader.sys.mjs",
+  DEFAULT_PURPOSE:
+    "moz-src:///browser/components/aiwindow/models/PromptLoader.sys.mjs",
+  SERVICE_TYPES:
+    "moz-src:///browser/components/aiwindow/models/Utils.sys.mjs",
 });
 
 /* Version number of the JSON file schema
@@ -1874,21 +1878,27 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
   // Find the conversation in the current SmartWindow
   const win = windowMediator.getMostRecentWindow("navigator:browser");
   const conversation = lazy.AIWindow.getActiveConversation(win);
-  // Render the messages in openAI format
-  // The conversation isn't stored in ChatConversation in the same form it is when it hits the API
-  // We convert it here to make sure the 2 are properly aligned, and there aren't bugs in conversion
-  const openAIFormatMessages = conversation.getMessagesInOpenAiFormat();
+  // Render the messages in openAI (chat-completions) format.
+  // `applyUrlTokens: false` keeps real URLs in the export
+  const openAIFormatMessages = conversation.getMessagesInChatCompletionsFormat({ applyUrlTokens: false });
   const compactedMessages = lazy.compactMessages(openAIFormatMessages);
 
-  // Create a temp openAIEngine with the active config in order to pull its parameters
+  // Resolve the active CHAT config (model + inference parameters) so the export
+  // records what the conversation would hit the API with.
   let engineConfig = null;
-  let engine;
   try {
-    engine = await lazy.openAIEngine.build(
+    const { engine, parameters } = await lazy.buildEngineForFeature(
       lazy.MODEL_FEATURES.CHAT,
-      `FOR_DUMP-${conversation.id}`
+      { flowId: `FOR_DUMP-${conversation.id}` }
     );
-    engineConfig = await lazy.loadCallContext(lazy.MODEL_FEATURES.CHAT);
+    engineConfig = {
+      model: engine.model,
+      parameters,
+      serviceType: lazy.SERVICE_TYPES.AI,
+      purpose:
+        lazy.FEATURE_PURPOSES[lazy.MODEL_FEATURES.CHAT] ??
+        lazy.FEATURE_PURPOSES[lazy.DEFAULT_PURPOSE],
+    };
   } catch (e) {
     engineConfig = { error: String(e) };
   }
@@ -2510,13 +2520,9 @@ async function countUserMessages() {
     const conversation = lazy.AIWindow.getActiveConversation(win);
     if (!conversation) return 0;
 
-    const openAIFormatMessages = conversation.getMessagesInOpenAiFormat();
+    const openAIFormatMessages = conversation.getMessagesInChatCompletionsFormat({ applyUrlTokens: false });
     const compactedMessages = lazy.compactMessages(openAIFormatMessages);
 
-    const engine = await lazy.openAIEngine.build(
-      lazy.MODEL_FEATURES.CHAT,
-      `FOR_USER_COUNT-${conversation.id}`
-    );
     const realTimeInfoPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.REAL_TIME_CONTEXT_DATE);
     const relevantMemoriesPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.MEMORIES_RELEVANT_CONTEXT);
 
@@ -2659,13 +2665,9 @@ async function getCompactedConversation() {
     const conversation = lazy.AIWindow.getActiveConversation(win);
     if (!conversation) return [];
 
-    const openAIFormatMessages = conversation.getMessagesInOpenAiFormat();
+    const openAIFormatMessages = conversation.getMessagesInChatCompletionsFormat({ applyUrlTokens: false });
     const compactedMessages = lazy.compactMessages(openAIFormatMessages);
 
-    const engine = await lazy.openAIEngine.build(
-      lazy.MODEL_FEATURES.CHAT,
-      `FOR_COMPACTED-${conversation.id}`
-    );
     const realTimeInfoPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.REAL_TIME_CONTEXT_DATE);
     const relevantMemoriesPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.MEMORIES_RELEVANT_CONTEXT);
 
