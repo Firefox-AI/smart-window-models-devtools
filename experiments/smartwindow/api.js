@@ -1910,6 +1910,7 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
     title: tab.label ?? null,
     isActiveTab: tab.selected,
     lastAccessed: tab.lastAccessed,
+    groupId: tab.group?.id ?? null,
   }));
 
   // Gather all stored SmartWindow memories
@@ -2063,6 +2064,7 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
     // Context for the browser like tabs, SmartWindow memories, and browsing history if the user specified at least a startDate
     browserContext: {
       tabs,
+      tabGroups: getTabGroups(),
       memories,
       browsingHistory: {
         datetimeRange: { start: startDate, end: endDate },
@@ -2644,6 +2646,22 @@ function getOpenTabs() {
     url: tab.linkedBrowser?.currentURI?.spec ?? null,
     title: tab.label ?? null,
     isActiveTab: tab.selected,
+  }));
+}
+
+// Snapshot of the active window's tab group definitions. Tab -> group
+// membership lives on browserContext.tabs[].groupId (null = ungrouped, so don't
+// collapse those into one cluster when evaluating). Unnamed groups have title "".
+function getTabGroups() {
+  const win = windowMediator.getMostRecentWindow("navigator:browser");
+  if (!win?.gBrowser) {
+    return [];
+  }
+  return Array.from(win.gBrowser.tabGroups).map(group => ({
+    id: group.id,
+    title: group.label ?? "",
+    color: group.color,
+    collapsed: group.collapsed,
   }));
 }
 
