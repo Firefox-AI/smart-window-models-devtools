@@ -68,7 +68,8 @@
               "tags":             { "type": "array",  "optional": true, "items": { "type": "string" } },
               "groundtruth":      { "type": "any",    "optional": true },
               "startDate":        { "type": "string", "optional": true },
-              "endDate":          { "type": "string", "optional": true }
+              "endDate":          { "type": "string", "optional": true },
+              "includeOpenTabs": { "type": "boolean", "optional": true }
             }
           }
         ]

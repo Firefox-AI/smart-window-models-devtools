@@ -32,8 +32,9 @@ ChromeUtils.defineESModuleGetters(lazy, {
  * Schema History
  * 1.0: Base version exporting application info, browser context, and 3 forms of the conversation (DB, raw rendered, compacted)
  * 2.0: Adding `eval_format` as an additional exported conversation version
+ * 2.1: Open tabs are optional — opting out empties `browserContext.tabs`/`tabGroups` and lists them in `reportingInformation.excludedFields`
  **/
-const JSON_SCHEMA_VERSION = "2.0"
+const JSON_SCHEMA_VERSION = "2.1"
 
 // SmartWindow tab URL to know where to put the "Export Conversation" button
 const AIWINDOW_TAB_URL = "chrome://browser/content/aiwindow/aiWindow.html";
@@ -282,6 +283,27 @@ function showExportDialog(doc) {
         dateErrorMsg.style.display = "none";
       });
     });
+
+    const includeTabsRow = doc.createElement("div");
+    Object.assign(includeTabsRow.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "6px",
+      fontSize: "13px",
+      lineHeight: "1.3",
+    });
+
+    const includeTabsCheckbox = doc.createElement("input");
+    includeTabsCheckbox.type = "checkbox";
+    includeTabsCheckbox.checked = true;
+    Object.assign(includeTabsCheckbox.style, { margin: "0", flexShrink: "0" });
+
+    const includeTabsLabel = doc.createElement("label");
+    includeTabsLabel.textContent = "Include open tabs and tab groups";
+    Object.assign(includeTabsLabel.style, { margin: "0", fontWeight: "400", color: "#1c1b22", cursor: "pointer" });
+    includeTabsLabel.addEventListener("click", () => includeTabsCheckbox.click());
+
+    includeTabsRow.append(includeTabsCheckbox, includeTabsLabel);
 
     const notesLabel = doc.createElement("label");
     notesLabel.textContent = "Notes";
@@ -1076,6 +1098,7 @@ function showExportDialog(doc) {
         groundtruth: Object.keys(groundtruth).length ? groundtruth : null,
         startDate,
         endDate,
+        includeOpenTabs: includeTabsCheckbox.checked,
       });
     });
     overlay.addEventListener("keydown", e => {
@@ -1185,7 +1208,7 @@ function showExportDialog(doc) {
       gap: "12px",
     });
 
-    leftColumn.append(bugLabelRow, bugUrlsContainer, tagLabelRow, tagsContainer, dateRangeLabel, presetSelect, dateRow, dateErrorMsg, notesLabel, textarea);
+    leftColumn.append(bugLabelRow, bugUrlsContainer, tagLabelRow, tagsContainer, dateRangeLabel, presetSelect, dateRow, dateErrorMsg, includeTabsRow, notesLabel, textarea);
     rightColumn.append(groundtruthSection);
     columnsWrapper.append(leftColumn, rightColumn);
 
@@ -1874,7 +1897,7 @@ async function getBrowsingHistory(startDate, endDate) {
  *
  * @returns {object} - Collection of SmartWindow contextual data related to AI models and their use
  */
-async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "" } = {}) {
+async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "", includeOpenTabs = true } = {}) {
   // Find the conversation in the current SmartWindow
   const win = windowMediator.getMostRecentWindow("navigator:browser");
   const conversation = lazy.AIWindow.getActiveConversation(win);
@@ -1904,14 +1927,17 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
   }
   const chatPrompt = await lazy.loadPrompt(lazy.MODEL_FEATURES.CHAT);
 
-  // Collect all open tabs
-  const tabs = Array.from(win.gBrowser.tabs).map(tab => ({
-    url: tab.linkedBrowser?.currentURI?.spec ?? null,
-    title: tab.label ?? null,
-    isActiveTab: tab.selected,
-    lastAccessed: tab.lastAccessed,
-    groupId: tab.group?.id ?? null,
-  }));
+  // Collect all open tabs. Opting out drops the list entirely, URLs included —
+  // and with it the scorable turn's context.tabs, which derives from this array.
+  const tabs = includeOpenTabs
+    ? Array.from(win.gBrowser.tabs).map(tab => ({
+        url: tab.linkedBrowser?.currentURI?.spec ?? null,
+        title: tab.label ?? null,
+        isActiveTab: tab.selected,
+        lastAccessed: tab.lastAccessed,
+        groupId: tab.group?.id ?? null,
+      }))
+    : [];
 
   // Gather all stored SmartWindow memories
   const memories = await lazy.MemoriesManager.getAllMemories();
@@ -2031,6 +2057,7 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
       bugzillaUrls,
       tags,
       notes,
+      ...(includeOpenTabs ? {} : { excludedFields: ["tabs", "tabGroups"] }),
     },
     // Information about the SmartWindow application including Fx version, openAIEngine (prompt, model, etc.), and user's locale/timezone
     applicationMetadata: {
@@ -2064,7 +2091,7 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
     // Context for the browser like tabs, SmartWindow memories, and browsing history if the user specified at least a startDate
     browserContext: {
       tabs,
-      tabGroups: getTabGroups(),
+      tabGroups: includeOpenTabs ? getTabGroups() : [],
       memories,
       browsingHistory: {
         datetimeRange: { start: startDate, end: endDate },
@@ -2212,7 +2239,7 @@ async function doBasicExport(browsingContext, options = {}) {
 /**
  * Open the file picker, gather SmartWindow information based on user parameters, and save to a JSON file
  */
-async function doExport(browsingContext, { notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "" } = {}) {
+async function doExport(browsingContext, { notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "", includeOpenTabs = true } = {}) {
 
   // Set up the file picker
   const fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
@@ -2230,7 +2257,7 @@ async function doExport(browsingContext, { notes = "", bugzillaUrls = [], tags =
   }
 
   // Collect the SmartWindow models data
-  const rawData = await collectSmartWindowData({ notes, bugzillaUrls, tags, groundtruth, startDate, endDate });
+  const rawData = await collectSmartWindowData({ notes, bugzillaUrls, tags, groundtruth, startDate, endDate, includeOpenTabs });
   const data = JSON.stringify(rawData, null, 2);
 
   // Save
@@ -2774,9 +2801,9 @@ this.smartwindow = class extends ExtensionAPI {
             return getOpenTabs();
           },
 
-          async exportToFile({ notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "" } = {}) {
+          async exportToFile({ notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "", includeOpenTabs = true } = {}) {
             const chromeWindow = windowMediator.getMostRecentWindow("navigator:browser");
-            return doExport(chromeWindow.browsingContext, { notes, bugzillaUrls, tags, groundtruth, startDate, endDate });
+            return doExport(chromeWindow.browsingContext, { notes, bugzillaUrls, tags, groundtruth, startDate, endDate, includeOpenTabs });
           },
 
           async basicExportToFile(options = {}) {

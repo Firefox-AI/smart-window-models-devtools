@@ -993,6 +993,7 @@ exportBtn.addEventListener("click", async () => {
       groundtruth: Object.keys(groundtruth).length ? groundtruth : null,
       startDate,
       endDate,
+      includeOpenTabs: document.getElementById("include-tabs-input").checked,
     });
 
     if (result.saved) {
