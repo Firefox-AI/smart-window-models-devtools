@@ -445,6 +445,16 @@ textarea {
   margin-top: 6px;
 }
 
+/* Left-column rows sit next to 13px field labels, not the 12px groundtruth rows. */
+.field-group > .checkbox-row {
+  align-items: center;
+  font-size: 13px;
+}
+
+.field-group > .checkbox-row input[type="checkbox"] {
+  margin: 0;
+}
+
 .tagged-memories-empty,
 .tools-empty {
   font-size: 12px;
