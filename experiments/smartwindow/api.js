@@ -1893,6 +1893,25 @@ async function getBrowsingHistory(startDate, endDate) {
 }
 
 /**
+ * Resolve the model name the active CHAT engine would use.
+ *
+ * @param {string} conversationId - Active conversation id, used for the flowId
+ * @returns {Promise<string|null>} - Model name, or null if the engine can't be built
+ */
+async function getChatModelName(conversationId) {
+  try {
+    const { engine } = await lazy.buildEngineForFeature(
+      lazy.MODEL_FEATURES.CHAT,
+      { flowId: `FOR_DUMP-${conversationId}` }
+    );
+    return engine.model;
+  } catch (e) {
+    console.warn("[smartwindow] getChatModelName failed:", e);
+    return null;
+  }
+}
+
+/**
  * Gather data from the active SmartWindow
  *
  * @returns {object} - Collection of SmartWindow contextual data related to AI models and their use
@@ -1995,7 +2014,10 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
 
   // Pull user-mocked system prompts to make sure they're skipped in user message counts
   const realTimeInfoPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.REAL_TIME_CONTEXT_DATE);
-  const relevantMemoriesPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.MEMORIES_RELEVANT_CONTEXT)
+  const relevantMemoriesPromptTemplate = await lazy.loadPrompt(
+    lazy.MODEL_FEATURES.MEMORIES_CONTEXT,
+    { model: engineConfig.model, module: "relevant-memories" }
+  );
 
   // Create messages list
   for (const msgIdx in compactedMessages) {
@@ -2552,8 +2574,12 @@ async function countUserMessages() {
     const openAIFormatMessages = conversation.getMessagesInChatCompletionsFormat({ applyUrlTokens: false });
     const compactedMessages = lazy.compactMessages(openAIFormatMessages);
 
+    const model = await getChatModelName(conversation.id);
     const realTimeInfoPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.REAL_TIME_CONTEXT_DATE);
-    const relevantMemoriesPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.MEMORIES_RELEVANT_CONTEXT);
+    const relevantMemoriesPromptTemplate = await lazy.loadPrompt(
+      lazy.MODEL_FEATURES.MEMORIES_CONTEXT,
+      { model, module: "relevant-memories" }
+    );
 
     let count = 0;
     for (const msg of compactedMessages) {
@@ -2713,8 +2739,12 @@ async function getCompactedConversation() {
     const openAIFormatMessages = conversation.getMessagesInChatCompletionsFormat({ applyUrlTokens: false });
     const compactedMessages = lazy.compactMessages(openAIFormatMessages);
 
+    const model = await getChatModelName(conversation.id);
     const realTimeInfoPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.REAL_TIME_CONTEXT_DATE);
-    const relevantMemoriesPromptTemplate = await lazy.loadPrompt(lazy.MODEL_FEATURES.MEMORIES_RELEVANT_CONTEXT);
+    const relevantMemoriesPromptTemplate = await lazy.loadPrompt(
+      lazy.MODEL_FEATURES.MEMORIES_CONTEXT,
+      { model, module: "relevant-memories" }
+    );
 
     return compactedMessages.filter(msg => {
       if (msg.role === "system") return false;
