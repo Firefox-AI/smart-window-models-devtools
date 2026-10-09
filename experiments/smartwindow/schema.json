@@ -69,7 +69,8 @@
               "groundtruth":      { "type": "any",    "optional": true },
               "startDate":        { "type": "string", "optional": true },
               "endDate":          { "type": "string", "optional": true },
-              "includeOpenTabs": { "type": "boolean", "optional": true }
+              "includeOpenTabs": { "type": "boolean", "optional": true },
+              "includeAITabPages": { "type": "boolean", "optional": true }
             }
           }
         ]
