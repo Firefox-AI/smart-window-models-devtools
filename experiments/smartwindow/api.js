@@ -4,6 +4,8 @@
 const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   AIWindow: "moz-src:///browser/components/aiwindow/ui/modules/AIWindow.sys.mjs",
+  AITabStore:
+    "moz-src:///browser/components/aiwindow/ui/modules/AITabStore.sys.mjs",
   MemoriesManager:
     "moz-src:///browser/components/aiwindow/models/memories/MemoriesManager.sys.mjs",
   MODEL_FEATURES:
@@ -33,8 +35,12 @@ ChromeUtils.defineESModuleGetters(lazy, {
  * 1.0: Base version exporting application info, browser context, and 3 forms of the conversation (DB, raw rendered, compacted)
  * 2.0: Adding `eval_format` as an additional exported conversation version
  * 2.1: Open tabs are optional — opting out empties `browserContext.tabs`/`tabGroups` and lists them in `reportingInformation.excludedFields`
+ * 2.2: Adding `browserContext.aiTabPages` — the stored AITabStore record for every about:smartpage?page=<slug> referenced in the conversation (optional, listed in `excludedFields` when opted out)
  **/
-const JSON_SCHEMA_VERSION = "2.1"
+const JSON_SCHEMA_VERSION = "2.2"
+
+// Matches about:smartpage?page=<slug> anywhere in the conversation; slug charset mirrors PAGE_NAME_REGEX in TrustedInternalURLs.mjs
+const SMART_PAGE_URL_REGEX = /about:smartpage\?(?:[^\s"'<>]*?&)?page=([\w-]+(?:\.html)?)/g;
 
 // SmartWindow tab URL to know where to put the "Export Conversation" button
 const AIWINDOW_TAB_URL = "chrome://browser/content/aiwindow/aiWindow.html";
@@ -304,6 +310,27 @@ function showExportDialog(doc) {
     includeTabsLabel.addEventListener("click", () => includeTabsCheckbox.click());
 
     includeTabsRow.append(includeTabsCheckbox, includeTabsLabel);
+
+    const includeAITabPagesRow = doc.createElement("div");
+    Object.assign(includeAITabPagesRow.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "6px",
+      fontSize: "13px",
+      lineHeight: "1.3",
+    });
+
+    const includeAITabPagesCheckbox = doc.createElement("input");
+    includeAITabPagesCheckbox.type = "checkbox";
+    includeAITabPagesCheckbox.checked = true;
+    Object.assign(includeAITabPagesCheckbox.style, { margin: "0", flexShrink: "0" });
+
+    const includeAITabPagesLabel = doc.createElement("label");
+    includeAITabPagesLabel.textContent = "Include AI tab pages referenced in the chat";
+    Object.assign(includeAITabPagesLabel.style, { margin: "0", fontWeight: "400", color: "#1c1b22", cursor: "pointer" });
+    includeAITabPagesLabel.addEventListener("click", () => includeAITabPagesCheckbox.click());
+
+    includeAITabPagesRow.append(includeAITabPagesCheckbox, includeAITabPagesLabel);
 
     const notesLabel = doc.createElement("label");
     notesLabel.textContent = "Notes";
@@ -1099,6 +1126,7 @@ function showExportDialog(doc) {
         startDate,
         endDate,
         includeOpenTabs: includeTabsCheckbox.checked,
+        includeAITabPages: includeAITabPagesCheckbox.checked,
       });
     });
     overlay.addEventListener("keydown", e => {
@@ -1208,7 +1236,7 @@ function showExportDialog(doc) {
       gap: "12px",
     });
 
-    leftColumn.append(bugLabelRow, bugUrlsContainer, tagLabelRow, tagsContainer, dateRangeLabel, presetSelect, dateRow, dateErrorMsg, includeTabsRow, notesLabel, textarea);
+    leftColumn.append(bugLabelRow, bugUrlsContainer, tagLabelRow, tagsContainer, dateRangeLabel, presetSelect, dateRow, dateErrorMsg, includeTabsRow, includeAITabPagesRow, notesLabel, textarea);
     rightColumn.append(groundtruthSection);
     columnsWrapper.append(leftColumn, rightColumn);
 
@@ -1893,6 +1921,29 @@ async function getBrowsingHistory(startDate, endDate) {
 }
 
 /**
+ * Find every about:smartpage?page=<slug> referenced anywhere in the conversation
+ * (message text, tool calls, tool results) and fetch its stored page.
+ *
+ * @param {Array<object>} messages - Raw ChatConversation messages
+ * @returns {Promise<Array<object>>} - AITabStore.getBySlug() result per slug, or
+ *   `{ slug, error }` when the page is missing or the lookup fails
+ */
+async function getReferencedAITabPages(messages) {
+  const serialized = JSON.stringify(messages ?? []);
+  const slugs = new Set(Array.from(serialized.matchAll(SMART_PAGE_URL_REGEX), m => m[1]));
+
+  return Promise.all(Array.from(slugs, async slug => {
+    try {
+      const pageData = await lazy.AITabStore.getBySlug(slug);
+      return pageData ?? { slug, error: "not found" };
+    } catch (e) {
+      console.warn(`[smartwindow] AITabStore.getBySlug(${slug}) failed:`, e);
+      return { slug, error: String(e) };
+    }
+  }));
+}
+
+/**
  * Resolve the model name the active CHAT engine would use.
  *
  * @param {string} conversationId - Active conversation id, used for the flowId
@@ -1916,7 +1967,7 @@ async function getChatModelName(conversationId) {
  *
  * @returns {object} - Collection of SmartWindow contextual data related to AI models and their use
  */
-async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "", includeOpenTabs = true } = {}) {
+async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "", includeOpenTabs = true, includeAITabPages = true } = {}) {
   // Find the conversation in the current SmartWindow
   const win = windowMediator.getMostRecentWindow("navigator:browser");
   const conversation = lazy.AIWindow.getActiveConversation(win);
@@ -1963,6 +2014,9 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
 
   // Pull history if the user specified at least a startDate
   const browsingHistory = await getBrowsingHistory(startDate, endDate);
+
+  // Look up every AI tab page the conversation links to
+  const aiTabPages = includeAITabPages ? await getReferencedAITabPages(conversation.messages) : [];
 
 
   // Prep eval_format conversation export
@@ -2066,6 +2120,11 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
     }
   }
 
+  const excludedFields = [
+    ...(includeOpenTabs ? [] : ["tabs", "tabGroups"]),
+    ...(includeAITabPages ? [] : ["aiTabPages"]),
+  ];
+
   // Output object
   return {
     // Information about the extension, itself, including its version and the JSON schema version
@@ -2079,7 +2138,7 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
       bugzillaUrls,
       tags,
       notes,
-      ...(includeOpenTabs ? {} : { excludedFields: ["tabs", "tabGroups"] }),
+      ...(excludedFields.length ? { excludedFields } : {}),
     },
     // Information about the SmartWindow application including Fx version, openAIEngine (prompt, model, etc.), and user's locale/timezone
     applicationMetadata: {
@@ -2114,6 +2173,7 @@ async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = []
     browserContext: {
       tabs,
       tabGroups: includeOpenTabs ? getTabGroups() : [],
+      aiTabPages,
       memories,
       browsingHistory: {
         datetimeRange: { start: startDate, end: endDate },
@@ -2261,7 +2321,7 @@ async function doBasicExport(browsingContext, options = {}) {
 /**
  * Open the file picker, gather SmartWindow information based on user parameters, and save to a JSON file
  */
-async function doExport(browsingContext, { notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "", includeOpenTabs = true } = {}) {
+async function doExport(browsingContext, { notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "", includeOpenTabs = true, includeAITabPages = true } = {}) {
 
   // Set up the file picker
   const fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
@@ -2279,7 +2339,7 @@ async function doExport(browsingContext, { notes = "", bugzillaUrls = [], tags =
   }
 
   // Collect the SmartWindow models data
-  const rawData = await collectSmartWindowData({ notes, bugzillaUrls, tags, groundtruth, startDate, endDate, includeOpenTabs });
+  const rawData = await collectSmartWindowData({ notes, bugzillaUrls, tags, groundtruth, startDate, endDate, includeOpenTabs, includeAITabPages });
   const data = JSON.stringify(rawData, null, 2);
 
   // Save
@@ -2831,9 +2891,9 @@ this.smartwindow = class extends ExtensionAPI {
             return getOpenTabs();
           },
 
-          async exportToFile({ notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "", includeOpenTabs = true } = {}) {
+          async exportToFile({ notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "", includeOpenTabs = true, includeAITabPages = true } = {}) {
             const chromeWindow = windowMediator.getMostRecentWindow("navigator:browser");
-            return doExport(chromeWindow.browsingContext, { notes, bugzillaUrls, tags, groundtruth, startDate, endDate, includeOpenTabs });
+            return doExport(chromeWindow.browsingContext, { notes, bugzillaUrls, tags, groundtruth, startDate, endDate, includeOpenTabs, includeAITabPages });
           },
 
           async basicExportToFile(options = {}) {

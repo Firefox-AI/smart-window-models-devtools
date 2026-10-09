@@ -994,6 +994,7 @@ exportBtn.addEventListener("click", async () => {
       startDate,
       endDate,
       includeOpenTabs: document.getElementById("include-tabs-input").checked,
+      includeAITabPages: document.getElementById("include-aitab-pages-input").checked,
     });
 
     if (result.saved) {
