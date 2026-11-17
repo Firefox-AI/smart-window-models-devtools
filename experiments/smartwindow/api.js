@@ -4,6 +4,7 @@
 const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   AIWindow: "moz-src:///browser/components/aiwindow/ui/modules/AIWindow.sys.mjs",
+  AIWindowUI: "moz-src:///browser/components/aiwindow/ui/modules/AIWindowUI.sys.mjs",
   AITabStore:
     "moz-src:///browser/components/aiwindow/ui/modules/AITabStore.sys.mjs",
   MemoriesManager:
@@ -51,6 +52,56 @@ const windowMediator = Cc["@mozilla.org/appshell/window-mediator;1"].getService(
   Ci.nsIWindowMediator
 );
 const appInfo = Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULAppInfo);
+
+/**
+ * Read the conversation the <ai-window> element in `doc` is actually showing.
+ */
+function getAIWindowElementConversation(doc) {
+  try {
+    return doc?.querySelector("ai-window")?.conversation ?? null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Resolve the conversation the user is looking at.
+ *
+ * Prefer the <ai-window> element's own conversation over
+ * AIWindow.getActiveConversation(): opening a past chat (e.g. from Firefox
+ * View's "Chats" list into a new tab) swaps the element's conversation via
+ * openConversation() without updating AIWindowTabStatesManager, so the tab
+ * state still holds the empty ChatConversation the tab was created with.
+ *
+ * Order: the document the export was triggered from → the selected
+ * SmartWindow tab → the open sidebar → AIWindow.getActiveConversation().
+ *
+ * @param {Document} [doc] - SmartWindow document hosting the export UI, if any
+ * @returns {ChatConversation|null}
+ */
+function resolveActiveConversation(doc = null) {
+  const fromDoc = getAIWindowElementConversation(doc);
+  if (fromDoc) return fromDoc;
+
+  const win = windowMediator.getMostRecentWindow("navigator:browser");
+  if (!win) return null;
+
+  const selected = win.gBrowser?.selectedBrowser;
+  if (selected?.currentURI?.spec === AIWINDOW_TAB_URL) {
+    const fromTab = getAIWindowElementConversation(selected.contentDocument);
+    if (fromTab) return fromTab;
+  }
+
+  let sidebarOpen = false;
+  try { sidebarOpen = lazy.AIWindowUI.isSidebarOpen(win); } catch (e) {}
+  if (sidebarOpen) {
+    const sidebar = win.document.getElementById("ai-window-browser");
+    const fromSidebar = getAIWindowElementConversation(sidebar?.contentDocument);
+    if (fromSidebar) return fromSidebar;
+  }
+
+  return lazy.AIWindow.getActiveConversation(win);
+}
 const uuidGenerator = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
 
 
@@ -794,7 +845,7 @@ function showExportDialog(doc) {
     (async () => {
       try {
         availableTools = normalizeToolsConfig(lazy.toolsConfig);
-        const userMessageCount = await countUserMessages();
+        const userMessageCount = await countUserMessages(doc);
         applyConditionalRequiredDialog(availableTools, { userMessageCount });
         toolsContainer.replaceChildren();
         if (!availableTools.length) {
@@ -825,8 +876,8 @@ function showExportDialog(doc) {
     let rawConversation = null;
     const compactedConversationReady = (async () => {
       try {
-        compactedConversation = await getCompactedConversation();
-        rawConversation = getRawConversation();
+        compactedConversation = await getCompactedConversation(doc);
+        rawConversation = getRawConversation(doc);
         await basicMemoriesReady;
         prefillBasicView(compactedConversation, rawConversation);
       } catch (err) {
@@ -1967,10 +2018,13 @@ async function getChatModelName(conversationId) {
  *
  * @returns {object} - Collection of SmartWindow contextual data related to AI models and their use
  */
-async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "", includeOpenTabs = true, includeAITabPages = true } = {}) {
+async function collectSmartWindowData({ notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "", includeOpenTabs = true, includeAITabPages = true, sourceDoc = null } = {}) {
   // Find the conversation in the current SmartWindow
   const win = windowMediator.getMostRecentWindow("navigator:browser");
-  const conversation = lazy.AIWindow.getActiveConversation(win);
+  const conversation = resolveActiveConversation(sourceDoc);
+  if (!conversation) {
+    throw new Error("No active SmartWindow conversation found");
+  }
   // Render the messages in openAI (chat-completions) format.
   // `applyUrlTokens: false` keeps real URLs in the export
   const openAIFormatMessages = conversation.getMessagesInChatCompletionsFormat({ applyUrlTokens: false });
@@ -2276,9 +2330,9 @@ function buildBasicGroundtruth(options) {
  * @param {object} options - Answers from the basic view's questions.
  * @returns {object} - SmartWindow data in the standard export shape.
  */
-async function collectBasicSmartWindowData(options = {}) {
+async function collectBasicSmartWindowData(options = {}, sourceDoc = null) {
   const groundtruth = buildBasicGroundtruth(options);
-  return collectSmartWindowData({ groundtruth });
+  return collectSmartWindowData({ groundtruth, sourceDoc });
 }
 
 /**
@@ -2286,7 +2340,7 @@ async function collectBasicSmartWindowData(options = {}) {
  * writes it to JSON. Parallel to doExport for the expert flow so the two can
  * evolve independently.
  */
-async function doBasicExport(browsingContext, options = {}) {
+async function doBasicExport(browsingContext, options = {}, sourceDoc = null) {
   const fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
   fp.init(browsingContext, "Export SmartWindow Data", Ci.nsIFilePicker.modeSave);
   fp.defaultExtension = "json";
@@ -2299,7 +2353,7 @@ async function doBasicExport(browsingContext, options = {}) {
     return { saved: false, reason: "cancelled" };
   }
 
-  const rawData = await collectBasicSmartWindowData(options);
+  const rawData = await collectBasicSmartWindowData(options, sourceDoc);
   const data = JSON.stringify(rawData, null, 2);
 
   const file = fp.file;
@@ -2321,7 +2375,7 @@ async function doBasicExport(browsingContext, options = {}) {
 /**
  * Open the file picker, gather SmartWindow information based on user parameters, and save to a JSON file
  */
-async function doExport(browsingContext, { notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "", includeOpenTabs = true, includeAITabPages = true } = {}) {
+async function doExport(browsingContext, { notes = "", bugzillaUrls = [], tags = [], groundtruth = null, startDate = "", endDate = "", includeOpenTabs = true, includeAITabPages = true } = {}, sourceDoc = null) {
 
   // Set up the file picker
   const fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
@@ -2339,7 +2393,7 @@ async function doExport(browsingContext, { notes = "", bugzillaUrls = [], tags =
   }
 
   // Collect the SmartWindow models data
-  const rawData = await collectSmartWindowData({ notes, bugzillaUrls, tags, groundtruth, startDate, endDate, includeOpenTabs, includeAITabPages });
+  const rawData = await collectSmartWindowData({ notes, bugzillaUrls, tags, groundtruth, startDate, endDate, includeOpenTabs, includeAITabPages, sourceDoc });
   const data = JSON.stringify(rawData, null, 2);
 
   // Save
@@ -2391,7 +2445,7 @@ function attachButton(aiWindowBrowser) {
     const result = await showExportDialog(doc);
     if (result === null) return;
     const exportFn = result.mode === "basic" ? doBasicExport : doExport;
-    exportFn(aiWindowBrowser.browsingContext, result).catch(e =>
+    exportFn(aiWindowBrowser.browsingContext, result, doc).catch(e =>
       console.error("SmartWindow export failed:", e)
     );
   });
@@ -2625,10 +2679,9 @@ function normalizeToolArgs(params) {
  * @returns {Promise<number>} - Number of real user messages, or 0 if no
  *   conversation/engine is available.
  */
-async function countUserMessages() {
+async function countUserMessages(sourceDoc = null) {
   try {
-    const win = windowMediator.getMostRecentWindow("navigator:browser");
-    const conversation = lazy.AIWindow.getActiveConversation(win);
+    const conversation = resolveActiveConversation(sourceDoc);
     if (!conversation) return 0;
 
     const openAIFormatMessages = conversation.getMessagesInChatCompletionsFormat({ applyUrlTokens: false });
@@ -2740,9 +2793,8 @@ function getAllToolCallArgs(messages, toolName) {
  *
  * Note: roles here are integers — `0` = user, `1` = assistant.
  */
-function getRawConversation() {
-  const win = windowMediator.getMostRecentWindow("navigator:browser");
-  const conversation = lazy.AIWindow.getActiveConversation(win);
+function getRawConversation(sourceDoc = null) {
+  const conversation = resolveActiveConversation(sourceDoc);
   if (!conversation) return [];
   return Array.from(conversation.messages ?? []);
 }
@@ -2790,10 +2842,9 @@ function getTabGroups() {
  *
  * @returns {Promise<Array<object>>}
  */
-async function getCompactedConversation() {
+async function getCompactedConversation(sourceDoc = null) {
   try {
-    const win = windowMediator.getMostRecentWindow("navigator:browser");
-    const conversation = lazy.AIWindow.getActiveConversation(win);
+    const conversation = resolveActiveConversation(sourceDoc);
     if (!conversation) return [];
 
     const openAIFormatMessages = conversation.getMessagesInChatCompletionsFormat({ applyUrlTokens: false });
@@ -2927,9 +2978,9 @@ this.smartwindow = class extends ExtensionAPI {
             if (!result) return { saved: false, reason: "cancelled" };
 
             if (result.mode === "basic") {
-              return doBasicExport(win.browsingContext, result);
+              return doBasicExport(win.browsingContext, result, doc);
             }
-            return doExport(win.browsingContext, result);
+            return doExport(win.browsingContext, result, doc);
           },
         },
       },
